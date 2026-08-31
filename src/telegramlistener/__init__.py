@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from ._exceptions import ConfigurationError, SessionError, TelegramListenerError
+from ._exceptions import (
+    ConfigurationError,
+    SessionError,
+    TelegramListenerError,
+    TranslationError,
+)
 from ._listener import TelegramListener
 from ._models import TelegramStreamedMessage
 from ._session import SessionManager
@@ -18,4 +23,5 @@ __all__ = [
     "TelegramListener",
     "TelegramListenerError",
     "TelegramStreamedMessage",
+    "TranslationError",
 ]

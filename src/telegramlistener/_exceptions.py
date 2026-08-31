@@ -16,7 +16,12 @@ class SessionError(TelegramListenerError):
 
 
 class ConfigurationError(TelegramListenerError):
-    """Raised when the listener is misconfigured at runtime.
+    """Raised when listener configuration is invalid."""
 
-    Example: start() called before set_channels().
+
+class TranslationError(TelegramListenerError):
+    """Raised when Telegram cannot translate text as requested.
+
+    Automatic channel translation catches this error and preserves the original
+    message.
     """

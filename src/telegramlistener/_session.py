@@ -82,7 +82,12 @@ class SessionManager:
         return self._session_file
 
     async def is_operational(self) -> bool:
-        """Return ``True`` if a valid, authorized session exists on disk."""
+        """Return ``True`` if a valid, authorized session exists on disk.
+
+        Transient connection or Telegram errors return ``False`` but preserve
+        the session file. Only a confirmed unauthorized or fatal session state
+        triggers cleanup.
+        """
         if not self._session_file.exists():
             return False
 
@@ -102,14 +107,9 @@ class SessionManager:
             return False
         except Exception as exc:
             logger.warning(
-                "Session health check failed (%s) — treating as inoperational.", exc
+                "Session health check failed (%s) — preserving the session file.",
+                exc,
             )
-            # If session file is malformed or incompatible, try removing it to
-            # avoid repeated crashes on subsequent runs.
-            try:
-                self._cleanup()
-            except Exception:
-                logger.debug("Session cleanup failed after health check error.")
             return False
         else:
             if not authorized:
@@ -162,19 +162,47 @@ class SessionManager:
     async def get_authorized_client(self) -> TelegramClient:
         """Return a connected :class:`~telethon.TelegramClient` for the current session.
 
+        The connection and authorization check happen on the same client that
+        is returned, avoiding a separate health-check connection.
+
         Raises:
             SessionError: If no valid session exists. Call :meth:`run_manual_login`
                 first.
         """
-        if not await self.is_operational():
+        if not self._session_file.exists():
             raise SessionError(
                 f"No valid session at {self._session_file}. "
-                "Call run_manual_login() first."
+                "Manual login required; call run_manual_login() explicitly."
             )
 
         client = TelegramClient(str(self._session_path), self.api_id, self.api_hash)
-        await client.connect()
-        return client
+        keep_connected = False
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                self._cleanup()
+                raise SessionError(
+                    f"Session at {self._session_file} is no longer authorized. "
+                    "Manual login required; call run_manual_login() explicitly."
+                )
+            keep_connected = True
+            return client
+        except SessionError:
+            raise
+        except _FATAL_SESSION_ERRORS as exc:
+            self._cleanup()
+            raise SessionError(
+                f"Session at {self._session_file} is invalid or revoked. "
+                "Manual login required; call run_manual_login() explicitly."
+            ) from exc
+        except Exception as exc:
+            raise SessionError(f"Could not connect to Telegram: {exc}") from exc
+        finally:
+            if not keep_connected:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    logger.debug("Disconnect failed while acquiring Telegram client.")
 
     def _cleanup(self) -> None:
         try:

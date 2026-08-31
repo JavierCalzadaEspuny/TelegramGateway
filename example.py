@@ -4,8 +4,12 @@ Run:
     uv run example.py
 
 Prerequisites:
-    Copy .env.example to .env and fill in your Telegram credentials, then:
+    Edit CHANNELS and TRANSLATION_CHANNELS below, copy .env.example to .env,
+    fill in your Telegram credentials, then:
     uv sync --extra examples
+
+The listener logs per-message processing, translation, and image-download times
+at INFO. No averages or metric history are collected.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from contextlib import suppress
 from dotenv import load_dotenv
 
 from telegramlistener import (
+    SessionError,
     SessionManager,
     TelegramListener,
     TelegramStreamedMessage,
@@ -28,32 +33,24 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
+# Keep runtime configuration as real Python values. Change these lists directly
+# when you want to monitor or translate a different set of channels.
+CHANNELS: list[str] = [
+    "testosint01",
+    "me_observer_TG",
+    "AjaNews",
+    "almayadeen",
+    "SabrenNewss",
+    "UKMTOFeed",
+]
+IMAGE_CHANNELS: list[str] = ["testosint01", "UKMTOFeed"]
+TRANSLATION_CHANNELS: list[str] = ["AjaNews", "almayadeen", "SabrenNewss"]
+TRANSLATION_TARGET_LANGUAGE = "en"
+TRANSLATION_TIMEOUT = 3.0
+TRANSLATION_MAX_CONCURRENCY = 5
+QUEUE_MAXSIZE = 1000
+
 load_dotenv()
-
-
-def _require(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise OSError(f"Missing required environment variable: {name}")
-    return value
-
-
-def _detect_image_format(image_bytes: bytes) -> str:
-    if image_bytes.startswith(b"\xff\xd8\xff"):
-        return "JPEG"
-    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "PNG"
-    return "unknown"
-
-
-def _describe_images(msg: TelegramStreamedMessage) -> None:
-    if not msg.images:
-        return
-
-    print(f"    Images: {len(msg.images)}")
-    for index, image_bytes in enumerate(msg.images, start=1):
-        image_format = _detect_image_format(image_bytes)
-        print(f"    [{index}] Format: {image_format}, Size: {len(image_bytes)} bytes")
 
 
 async def consume(queue: asyncio.Queue[TelegramStreamedMessage | None]) -> None:
@@ -63,24 +60,32 @@ async def consume(queue: asyncio.Queue[TelegramStreamedMessage | None]) -> None:
             queue.task_done()
             break
 
+        print("-" * 150)
         print(msg)
-        _describe_images(msg)
+        print("-" * 150)
+        print("")
+
         queue.task_done()
 
 
 async def main() -> None:
     manager = SessionManager(
-        api_id=int(_require("TELEGRAM_API_ID")),
-        api_hash=_require("TELEGRAM_API_HASH"),
-        phone=_require("TELEGRAM_PHONE"),
+        api_id=int(os.environ["TELEGRAM_API_ID"]),
+        api_hash=os.environ["TELEGRAM_API_HASH"],
+        phone=os.environ["TELEGRAM_PHONE"],
         session_name=os.getenv("TELEGRAM_SESSION_NAME", "telegram"),
     )
 
-    if not await manager.is_operational():
-        await manager.run_manual_login()
-
-    async with TelegramListener(session_manager=manager) as listener:
-        listener.set_channels(["testosint01"])
+    async with TelegramListener(
+        session_manager=manager,
+        channels=CHANNELS,
+        image_channels=IMAGE_CHANNELS,
+        translation_channels=TRANSLATION_CHANNELS,
+        translation_target_language=TRANSLATION_TARGET_LANGUAGE,
+        translation_timeout=TRANSLATION_TIMEOUT,
+        translation_max_concurrency=TRANSLATION_MAX_CONCURRENCY,
+        queue_maxsize=QUEUE_MAXSIZE,
+    ) as listener:
         consumer = asyncio.create_task(consume(listener.queue))
         try:
             await listener.start()
@@ -93,5 +98,11 @@ async def main() -> None:
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except SessionError as exc:
+        logging.getLogger(__name__).error(
+            "Telegram session unavailable: %s No automatic login was started.",
+            exc,
+        )
+        raise SystemExit(1) from exc
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("Stopped.")
