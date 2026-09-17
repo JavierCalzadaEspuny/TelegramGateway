@@ -74,7 +74,7 @@ listener = TelegramListener(
     image_channels=["AjaNews"],
     translation_channels=["almayadeen"],
     translation_target_language="en",
-    queue_maxsize=1_000,
+    queue_maxsize=1000,
 )
 consumer = asyncio.create_task(consume(listener))
 try:
@@ -104,8 +104,8 @@ history = TelegramHistory(
     translation_target_language="en",
 )
 messages = await history.fetch(
-    start=1_767_225_600,
-    end=1_767_312_000,
+    start=1767225600,
+    end=1767_312000,
 )
 
 for message in messages:
@@ -132,10 +132,25 @@ Both workflows use the same processing rules:
   has a short bounded timeout and no retries; history can use a slower policy
   with FloodWait retries before falling back to the original message.
 
-`TelegramMessage` includes `message_id`, `timestamp`, channel metadata, the
-deterministic `id`, original and translated text, and images. Its deterministic
-ID is stable for the same Telegram source message, including across live and
-history retrieval.
+`TelegramMessage` is an immutable normalized representation of one Telegram
+message (or one grouped album):
+
+| Field | Contents |
+| --- | --- |
+| `id` | Deterministic 26-character identifier derived from the timestamp, channel ID, and Telegram message ID. |
+| `message_id` | Original Telegram message ID within the channel. |
+| `timestamp` | Message timestamp as Unix seconds. |
+| `channel_title` | Display title of the source channel. |
+| `channel_username` | Public channel username, or `None` when unavailable. |
+| `channel_id` | Telegram channel ID. |
+| `text` | Sanitized original message text, or `None`. It is never replaced by a translation. |
+| `images` | Immutable tuple of downloaded image bytes. It is empty when no configured image was downloaded. |
+| `translated_text` | Optional translated text, or `None` when translation is disabled or unavailable. |
+| `translation_language` | Target language of `translated_text`, or `None`. |
+
+The convenience property `source_id` returns `(channel_id, message_id)`. The
+deterministic ID is stable for the same Telegram source message, including
+across live and history retrieval.
 
 `message.to_dict()` returns the same fields as a plain Python dictionary. Image
 data remains as the original `bytes` tuple; the method does not encode images or
