@@ -20,7 +20,7 @@ SMOKE_DIR = Path(__file__).resolve().parent
 load_dotenv(SMOKE_DIR / ".env")
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -50,9 +50,7 @@ async def consume(queue: asyncio.Queue[TelegramMessage | None]) -> None:
         try:
             if message is None:
                 break
-            print()
             print(message)
-            print()
         finally:
             queue.task_done()
 

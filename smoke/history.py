@@ -19,7 +19,7 @@ SMOKE_DIR = Path(__file__).resolve().parent
 load_dotenv(SMOKE_DIR / ".env")
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ async def main() -> None:
                 "TELEGRAM_HISTORY_TRANSLATION_TARGET_LANGUAGE", "en"
             ),
             translation_timeout=float(
-                os.getenv("TELEGRAM_HISTORY_TRANSLATION_TIMEOUT", "30")
+                os.getenv("TELEGRAM_HISTORY_TRANSLATION_TIMEOUT", "5")
             ),
             translation_retries=int(
                 os.getenv("TELEGRAM_HISTORY_TRANSLATION_RETRIES", "2")
@@ -110,9 +110,7 @@ async def main() -> None:
         await client.disconnect()
 
     for message in messages:
-        print()
         print(message)
-        print()
 
 
 if __name__ == "__main__":

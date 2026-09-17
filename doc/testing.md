@@ -24,14 +24,14 @@ scripts use the same authorized session and must stop with a clear instruction,
 without retrying login, if it is absent or unauthorized.
 
 Leave `smoke/listener.py` running while messages arrive. Confirm that it prints
-live `TelegramMessage` values, groups albums, downloads photos only for its
-configured image channels, keeps original text when translation fails, and
-stops cleanly with `Ctrl-C`.
+each live `TelegramMessage` as an indented JSON-like representation, groups
+albums, downloads photos only for its configured image channels, keeps original
+text when translation fails, and stops cleanly with `Ctrl-C`.
 
 `smoke/history.py` performs one finite `[TELEGRAM_HISTORY_START,
 TELEGRAM_HISTORY_END)` query, using Unix seconds from `smoke/.env`, and prints
-each returned `TelegramMessage`. It is not a live listener and it does not
-write the returned list anywhere.
+each returned `TelegramMessage` in the same representation. It is not a live
+listener and it does not write the returned list anywhere.
 
 ## Temporary behavioral tests
 

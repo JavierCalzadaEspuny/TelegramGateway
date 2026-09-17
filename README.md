@@ -63,7 +63,7 @@ async def consume(listener: TelegramListener) -> None:
         try:
             if message is None:
                 return
-            print(message.id, message.timestamp, message.text)
+            print(message)
         finally:
             listener.queue.task_done()
 

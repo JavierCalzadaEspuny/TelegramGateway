@@ -51,6 +51,11 @@ non-translation client failures propagate. Image-download failures also leave
 the logical message available. `TelegramHistory.fetch()` requires a connected
 client and raises `RuntimeError` before retrieval when it is disconnected.
 
+The smoke scripts use independent configuration namespaces. `listener.py` reads
+only `TELEGRAM_LISTENER_*` channel and enrichment settings; `history.py` reads
+only `TELEGRAM_HISTORY_*` settings. They share only the session and credential
+variables, so either workflow can be run without configuring the other.
+
 ## Repository scope
 
 ```text
