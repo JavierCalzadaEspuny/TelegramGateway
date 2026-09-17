@@ -32,9 +32,6 @@ coverage.xml
 # OS files
 .DS_Store
 
-# Runtime cache for telegram listener
-.cache_telegramlistener/
-
 # Runtime logs
 *.log
 debug.log

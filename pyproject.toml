@@ -3,16 +3,16 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "telegramlistener"
-version = "0.3.0"
-description = "Stream Telegram channel messages to an asyncio queue."
+name = "telegram-gateway"
+version = "1.0.0"
+description = "Async Telegram gateway for live queues and bounded historical retrieval."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Javier Calzada", email = "calzada.espuny.javier@gmail.com" }]
-keywords = ["telegram", "telethon", "async", "streaming", "queue"]
+keywords = ["telegram", "telethon", "async", "history", "streaming", "messages"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -29,9 +29,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Cerval/TelegramListener"
-Repository = "https://github.com/Cerval/TelegramListener"
-Issues = "https://github.com/Cerval/TelegramListener/issues"
+Homepage = "https://github.com/JavierCalzadaEspuny/TelegramListener"
+Repository = "https://github.com/JavierCalzadaEspuny/TelegramListener"
+Issues = "https://github.com/JavierCalzadaEspuny/TelegramListener/issues"
 
 [project.optional-dependencies]
 examples = ["python-dotenv>=1.0.0"]
@@ -41,7 +41,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["telegramlistener*"]
+include = ["telegram_gateway*"]
 
 [tool.ruff]
 target-version = "py310"

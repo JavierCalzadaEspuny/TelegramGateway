@@ -1,4 +1,4 @@
-"""Run the real TelegramListener smoke test with local configuration."""
+"""Run the historical TelegramHistory smoke test with local configuration."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-from contextlib import suppress
 from pathlib import Path
 from typing import cast
 
@@ -14,7 +13,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.errors import AuthKeyError, UnauthorizedError
 
-from telegramlistener import TelegramListener, TelegramStreamedMessage
+from telegram_gateway import TelegramHistory
 
 SMOKE_DIR = Path(__file__).resolve().parent
 load_dotenv(SMOKE_DIR / ".env")
@@ -33,6 +32,16 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _parse_int_env(name: str, default: str | None = None) -> int:
+    value = os.getenv(name, default or "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required in {SMOKE_DIR / '.env'}")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+
+
 def _list_env(name: str) -> list[str]:
     return cast(list[str], json.loads(os.getenv(name, "[]")))
 
@@ -42,21 +51,6 @@ def _session_stem() -> Path:
     if not session_name or Path(session_name).name != session_name:
         raise RuntimeError("TELEGRAM_SESSION_NAME must be a simple filename")
     return SMOKE_DIR / session_name
-
-
-async def consume(queue: asyncio.Queue[TelegramStreamedMessage | None]) -> None:
-    while True:
-        message = await queue.get()
-        try:
-            if message is None:
-                break
-
-            print("-" * 150)
-            print(message)
-            print("-" * 150)
-            print("")
-        finally:
-            queue.task_done()
 
 
 async def main() -> None:
@@ -70,18 +64,20 @@ async def main() -> None:
         )
         return
 
-    channels = _list_env("TELEGRAM_MONITOR_CHANNELS")
+    channels = _list_env("TELEGRAM_HISTORY_CHANNELS")
     if not channels:
         raise RuntimeError(
-            f"TELEGRAM_MONITOR_CHANNELS is required in {SMOKE_DIR / '.env'}"
+            f"TELEGRAM_HISTORY_CHANNELS is required in {SMOKE_DIR / '.env'}"
         )
 
-    async with TelegramClient(
+    client = TelegramClient(
         str(session_stem),
         int(_required_env("TELEGRAM_API_ID")),
         _required_env("TELEGRAM_API_HASH"),
         auto_reconnect=True,
-    ) as client:
+    )
+    try:
+        await client.connect()
         if not await client.is_user_authorized():
             logger.error(
                 "Telegram session at %s is not authorized. Run `uv run "
@@ -90,32 +86,33 @@ async def main() -> None:
             )
             return
 
-        logger.info(
-            "Telegram session authorized. Monitoring %d channel(s). Press "
-            "Ctrl-C to stop.",
-            len(channels),
-        )
-        listener = TelegramListener(
+        history = TelegramHistory(
             client=client,
             channels=channels,
-            image_channels=_list_env("TELEGRAM_IMAGE_CHANNELS"),
-            translation_channels=_list_env("TELEGRAM_TRANSLATION_CHANNELS"),
+            image_channels=_list_env("TELEGRAM_HISTORY_IMAGE_CHANNELS"),
+            translation_channels=_list_env("TELEGRAM_HISTORY_TRANSLATION_CHANNELS"),
             translation_target_language=os.getenv(
-                "TELEGRAM_TRANSLATION_TARGET_LANGUAGE", "en"
+                "TELEGRAM_HISTORY_TRANSLATION_TARGET_LANGUAGE", "en"
             ),
-            translation_timeout=float(os.getenv("TELEGRAM_TRANSLATION_TIMEOUT", "3")),
-            translation_max_concurrency=int(
-                os.getenv("TELEGRAM_TRANSLATION_MAX_CONCURRENCY", "2")
+            translation_timeout=float(
+                os.getenv("TELEGRAM_HISTORY_TRANSLATION_TIMEOUT", "30")
             ),
-            queue_maxsize=int(os.getenv("TELEGRAM_QUEUE_MAXSIZE", "1000")),
+            translation_retries=int(
+                os.getenv("TELEGRAM_HISTORY_TRANSLATION_RETRIES", "2")
+            ),
+            history_wait_time=float(os.getenv("TELEGRAM_HISTORY_WAIT_TIME", "1")),
         )
-        consumer = asyncio.create_task(consume(listener.queue))
-        try:
-            await listener.start()
-        finally:
-            consumer.cancel()
-            with suppress(asyncio.CancelledError):
-                await consumer
+        messages = await history.fetch(
+            start=_parse_int_env("TELEGRAM_HISTORY_START"),
+            end=_parse_int_env("TELEGRAM_HISTORY_END"),
+        )
+    finally:
+        await client.disconnect()
+
+    for message in messages:
+        print()
+        print(message)
+        print()
 
 
 if __name__ == "__main__":
@@ -126,5 +123,3 @@ if __name__ == "__main__":
             "Telegram session unavailable: %s No interactive login was started.",
             exc,
         )
-    except KeyboardInterrupt:
-        logger.info("Stopped.")

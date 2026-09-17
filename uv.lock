@@ -73,8 +73,8 @@ wheels = [
 ]
 
 [[package]]
-name = "telegramlistener"
-version = "0.3.0"
+name = "telegram-gateway"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "emoji" },
