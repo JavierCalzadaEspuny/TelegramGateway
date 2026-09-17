@@ -19,40 +19,56 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add git+https://github.com/Cerval/TelegramListener.git
 ```
 
+The package is tested and locked against Telethon 1.45.0.
+
 ---
 
 ## Quick Start
 
 ```python
-from telegramlistener import SessionManager, TelegramListener
+from pathlib import Path
 
-manager = SessionManager(api_id=..., api_hash=..., phone="+34612345678")
+from telethon import TelegramClient
+from telegramlistener import TelegramListener
 
-# The session must have been authorized explicitly before this point.
+session = Path("telegram")
+if not session.with_suffix(".session").exists():
+    raise RuntimeError("Create the Telegram session manually before starting")
 
-async with TelegramListener(
-    session_manager=manager,
-    channels=["cnn", "ajanews"],
-    translation_channels=["ajanews"],
-    translation_target_language="en",
-) as listener:
-    await listener.start()                    # blocks; messages arrive on listener.queue
+client = TelegramClient(session, api_id=..., api_hash=..., auto_reconnect=True)
+async with client:
+    if not await client.is_user_authorized():
+        raise RuntimeError("The Telegram session is not authorized")
+
+    listener = TelegramListener(
+        client=client,
+        channels=["cnn", "ajanews"],
+        translation_channels=["ajanews"],
+        translation_target_language="en",
+    )
+    await listener.start()  # blocks; messages arrive on listener.queue
 ```
 
-`TelegramListener` never starts an interactive login. Run
-`await manager.run_manual_login()` explicitly, while you are present to enter
-the SMS code or 2FA password, before the first listener run. If the session is
-missing or revoked, the listener logs an error and exits without retrying login.
+The caller owns authentication. The runtime path above never calls `start()` or
+asks for a phone code. If the session is missing or unauthorized, stop the
+application and perform manual setup separately.
+
+### Real smoke test
+
+The repository includes an external integration check in `smoke/`. It keeps the
+credentials and Telethon session beside its configuration without adding any
+authentication code to the library. See [Running the smoke test](#running-the-smoke-test)
+for the one-time login and runtime commands.
 
 ---
 
-## Migrating from 0.1
+## Migrating from 0.2
 
-Version 0.2 replaces runtime setters with constructor-only configuration. Move
-the values previously passed to `set_channels()` and
-`set_translation_channels()` into `TelegramListener(...)`. Listener instances
-are intentionally single-use; create a new instance to change channels or
-restart after shutdown.
+Version 0.3 keeps constructor-only configuration and makes the lifecycle
+boundary explicit: the caller owns the `TelegramClient` context, while the
+listener only registers handlers and delivers queue items. Create and authorize
+the client, then pass it as `client=...`. Listener instances remain single-use;
+create a new instance to change channels or restart after shutdown.
 
 ---
 
@@ -73,11 +89,13 @@ async def consume(queue: asyncio.Queue) -> None:
             print(f"Translation ({msg.translation_language}): {msg.translated_text}")
         queue.task_done()
 
-async with TelegramListener(
-    session_manager=manager,
-    channels=["cnn", "ajanews"],
-    translation_channels=["ajanews"],
-) as listener:
+
+async with client:
+    listener = TelegramListener(
+        client=client,
+        channels=["cnn", "ajanews"],
+        translation_channels=["ajanews"],
+    )
     consumer = asyncio.create_task(consume(listener.queue))
     try:
         await listener.start()
@@ -89,37 +107,13 @@ async with TelegramListener(
 
 ## API Reference
 
-### `SessionManager`
-
-Manages Telethon session lifecycle: validation, interactive login, and cleanup.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `api_id` | `int` | — | Telegram API ID from [my.telegram.org](https://my.telegram.org) |
-| `api_hash` | `str` | — | Telegram API hash |
-| `phone` | `str` | — | Phone number in international format, e.g. `"+34612345678"` |
-| `session_name` | `str` | `"telegram"` | Filename stem for the `.session` file |
-| `session_dir` | `Path \| None` | `~/.cache/telegramlistener/` | Directory for session files |
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `await is_operational()` | `bool` | `True` if authorized; preserves the session on transient errors |
-| `await run_manual_login()` | `None` | Interactive terminal login; persists session |
-| `await get_authorized_client()` | `TelegramClient` | Connected client; raises `SessionError` if no session |
-
-`is_operational()` returns `False` for a temporary connection or Telegram error
-without deleting the session file. The file is cleaned up only after Telegram
-confirms that the session is unauthorized, revoked, or otherwise fatally invalid.
-
----
-
 ### `TelegramListener`
 
 Streams new messages from configured channels into `listener.queue`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `session_manager` | `SessionManager` | — | Authorized session manager |
+| `client` | `TelegramClient` | — | Connected and authorized Telethon client |
 | `channels` | `Sequence[str]` | — | Channel usernames to monitor |
 | `image_channels` | `Sequence[str]` | `()` | Monitored channels whose photos to download |
 | `translation_channels` | `Sequence[str]` | `()` | Monitored channels to translate |
@@ -131,10 +125,11 @@ Streams new messages from configured channels into `listener.queue`.
 | Attribute / Method | Description |
 |--------------------|-------------|
 | `queue` | `asyncio.Queue[TelegramStreamedMessage \| None]` — consume from here; `None` marks shutdown |
-| `await start()` | Start once and block. Reconnects automatically on failures |
-| `await aclose()` | Graceful shutdown, disconnects client |
-| `stop()` | Fire-and-forget shutdown (use `aclose()` when you can await) |
-| `async with listener:` | Calls `aclose()` on exit automatically |
+| `await start()` | Start once and block. Telethon handles transient reconnection |
+
+`TelegramListener` never disconnects the supplied client. Use Telethon's
+`async with TelegramClient(...)` context or call `client.disconnect()` in the
+application that created it.
 
 ---
 
@@ -179,14 +174,14 @@ That means these cases are all valid:
 
 ### Channels
 
-`channels` accepts channel usernames with or without a leading `@`. Configuration
-is fixed for the lifetime of the listener; create a new listener to monitor a
+Pass the exact Telegram channel usernames you want to monitor. Configuration is
+fixed for the lifetime of the listener; create a new listener to monitor a
 different set.
 
 ```python
 listener = TelegramListener(
-    session_manager=manager,
-    channels=["cnn", "@AjaNews"],
+    client=client,
+    channels=["cnn", "AjaNews"],
 )
 ```
 
@@ -203,7 +198,7 @@ Pass the monitored channels and the subset to translate together:
 
 ```python
 listener = TelegramListener(
-    session_manager=manager,
+    client=client,
     channels=["cnn", "ajanews", "franceinfo"],
     translation_channels=["ajanews", "franceinfo"],
     translation_target_language="en",
@@ -212,7 +207,7 @@ listener = TelegramListener(
 )
 ```
 
-Channel names are case-insensitive and may include a leading `@`. Telegram
+Use the same channel names in `channels` and `translation_channels`. Telegram
 detects the source language automatically; `translation_target_language` must be
 a two-letter ISO 639-1 code such as `"en"`, `"es"`, or `"fr"`.
 Every translation channel must also appear in `channels`.
@@ -235,11 +230,11 @@ from being emitted. The normal queue-full drop policy still applies.
 Omitting `translation_channels` disables automatic translation:
 
 ```python
-listener = TelegramListener(session_manager=manager, channels=["cnn"])
+listener = TelegramListener(client=client, channels=["cnn"])
 ```
 
-The raw Telegram method is available only to user accounts, which matches the
-phone-based `SessionManager` login flow used by this library.
+The raw Telegram method is available only to user accounts. Translation uses
+the same client that delivers the events.
 
 ---
 
@@ -250,42 +245,60 @@ All library exceptions inherit from `TelegramListenerError`.
 | Exception | When |
 |-----------|------|
 | `TelegramListenerError` | Base class — catch this to handle any library error |
-| `SessionError` | Session missing, revoked, or login failed |
 | `ConfigurationError` | Missing channels or invalid translation language |
-| `TranslationError` | Manual translation requested without a running listener, or Telegram cannot translate the text |
+| `TranslationError` | Telegram cannot translate the text |
 
 ---
 
-## Configuration
+## Smoke-test configuration
 
-Copy `.env.example` to `.env` and fill in your credentials:
+The library does not read environment variables. The external integration
+scripts in `smoke/` do, so the test setup stays outside the package:
+
+```bash
+cp smoke/.env.example smoke/.env
+```
+
+The channel variables are JSON arrays, not comma-separated strings:
+
+```env
+TELEGRAM_MONITOR_CHANNELS=["testosint01","AjaNews"]
+TELEGRAM_IMAGE_CHANNELS=["testosint01"]
+TELEGRAM_TRANSLATION_CHANNELS=["AjaNews"]
+```
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TELEGRAM_API_ID` | Yes | From [my.telegram.org](https://my.telegram.org) |
 | `TELEGRAM_API_HASH` | Yes | From [my.telegram.org](https://my.telegram.org) |
-| `TELEGRAM_PHONE` | Yes | International format, e.g. `+34612345678` |
-| `TELEGRAM_SESSION_NAME` | No | Defaults to `telegram` |
+| `TELEGRAM_PHONE` | Only for `login.py` | International format, e.g. `+34612345678` |
+| `TELEGRAM_SESSION_NAME` | No | Session filename, defaults to `telegram` |
+| `TELEGRAM_MONITOR_CHANNELS` | Yes | JSON list of monitored usernames |
+| `TELEGRAM_IMAGE_CHANNELS` | No | JSON list of image-download channels |
+| `TELEGRAM_TRANSLATION_CHANNELS` | No | JSON list of translation channels |
+| `TELEGRAM_TRANSLATION_TARGET_LANGUAGE` | No | Two-letter language code, defaults to `en` |
+| `TELEGRAM_TRANSLATION_TIMEOUT` | No | Translation timeout in seconds, defaults to `3` |
+| `TELEGRAM_TRANSLATION_MAX_CONCURRENCY` | No | Concurrent translations, defaults to `2` |
+| `TELEGRAM_QUEUE_MAXSIZE` | No | Queue size, defaults to `1000` |
 
-Session files are stored at `~/.cache/telegramlistener/<session_name>.session`.
-Login is an explicit operation; subsequent listener runs reuse the saved session
-automatically and never prompt for credentials.
-
-`example.py` keeps its channel lists and typed listener settings directly in
-Python. The `.env` file is only for credentials and session settings; lists are
-not encoded as comma-separated strings.
-
-Translation uses the same Telegram credentials and session. It does not require
-an additional environment variable or third-party service account.
+The session is stored at `smoke/<TELEGRAM_SESSION_NAME>.session`. Both the
+session and `smoke/.env` are ignored by Git. Translation uses the same Telegram
+credentials and session; no additional service account is needed.
 
 ---
 
 ## Reconnection
 
-The listener reconnects on transient failures using exponential backoff: 2 s → 4 s → 8 s → … capped at 60 s, with ±1 s jitter. It stops permanently only if:
+The caller should create the client with Telethon's native
+`auto_reconnect=True`. The client retries transient transport failures using
+its `connection_retries` and `retry_delay` settings. `TelegramListener` waits
+on `run_until_disconnected()` once and does not add a second retry loop, custom
+backoff, jitter, polling, or session cleanup.
 
-- The Telegram session is revoked or the account is deactivated, or
-- `stop()` / `aclose()` is called explicitly.
+If Telethon exhausts its native retries, the connection error is propagated to
+the caller. A supervisor such as Docker can then decide whether to restart the
+application. Authentication failures are also propagated; the caller must
+stop and perform manual login rather than retrying credentials.
 
 ---
 
@@ -295,15 +308,19 @@ The library is silent by default (uses `NullHandler`). Enable logging at any lev
 
 ```python
 import logging
+
 logging.getLogger("telegramlistener").setLevel(logging.DEBUG)
 ```
 
-At `INFO`, the listener emits one timing line for every message that reaches the
-queue. It includes `processing_ms` for the complete listener path,
+At `DEBUG`, the listener emits one timing line for every message that reaches
+the queue. It includes `processing_ms` for the complete listener path,
 `translation_ms` for the Telegram translation request when applicable, and
 `image_download_ms` for actual configured image-download attempts. Metadata
 resolution and channel-filter checks are excluded. The values are measured per
 message; the library does not calculate averages or retain metric history.
+
+At `INFO`, startup and operational warnings remain visible without producing a
+line for every message.
 
 Example:
 
@@ -312,24 +329,32 @@ Processed Telegram message channel='AjaNews' message_id=123456 processing_ms=284
 ```
 
 `queued=False` means the message was dropped because `queue_maxsize` was full.
-Use `IMAGE_CHANNELS = []` in the example to measure translation without image
-download time.
+Use `TELEGRAM_IMAGE_CHANNELS=[]` in `smoke/.env` to measure translation without
+image-download time.
+
+The listener does not enable Telethon's `catch_up` mode. Replaying updates that
+arrived while the client was offline is a separate application policy from this
+real-time stream.
 
 ---
 
-## Running the Example
+## Running the Smoke Test
+
+Run these commands from the repository root:
 
 ```bash
 uv sync --extra examples
-cp .env.example .env   # fill in your credentials
-uv run example.py
+cp smoke/.env.example smoke/.env   # fill in your credentials and channels
+uv run smoke/login.py               # one-time interactive setup
+uv run smoke/run.py
 ```
 
-`example.py` is the manual end-to-end smoke test. Edit its `CHANNELS` and
-`TRANSLATION_CHANNELS` lists directly, then it loads credentials from `.env`,
-prints original and translated messages, and runs until `Ctrl-C`. See
-[doc/testing.md](doc/testing.md) for the expected behavior and the temporary-test
-policy.
+`smoke/login.py` creates the persistent session and is the only command that
+asks for the SMS code or 2FA password. Run it only when you are present. The
+long-lived `smoke/run.py` command never starts login; it loads all parameters
+from `smoke/.env`, prints original and translated messages, and runs until
+`Ctrl-C`. See [doc/testing.md](doc/testing.md) for expected behavior and the
+temporary-test policy.
 
 ---
 

@@ -45,3 +45,15 @@ htmlcov/
 # Temporary files
 *.tmp
 *.bak
+
+# Local agent planning artifacts
+docs/superpowers/
+
+# Telethon local session files contain authentication keys
+*.session
+*.session-*
+
+# Local real smoke-test configuration
+smoke/.env
+smoke/*.session
+smoke/*.session-*

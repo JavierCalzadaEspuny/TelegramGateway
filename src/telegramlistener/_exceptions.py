@@ -8,13 +8,6 @@ class TelegramListenerError(Exception):
     """
 
 
-class SessionError(TelegramListenerError):
-    """Raised when the Telegram session is missing, invalid, or revoked.
-
-    Typically signals that run_manual_login() needs to be called.
-    """
-
-
 class ConfigurationError(TelegramListenerError):
     """Raised when listener configuration is invalid."""
 

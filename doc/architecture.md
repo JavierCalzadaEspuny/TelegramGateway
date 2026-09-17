@@ -1,399 +1,222 @@
 # TelegramListener — Architecture Reference
 
-This document is a complete reference for the `telegramlistener` library. It is intended to give a future agent (or developer) a full understanding of how the codebase works without needing to read the source first.
-
----
+This document describes the small runtime boundary of the `telegramlistener`
+package. It is deliberately focused on streaming messages; authentication and
+historical exports belong to the application using the package.
 
 ## Purpose
 
-`telegramlistener` is a Python library that listens to public Telegram channels in real time and streams their messages into an `asyncio.Queue`. Consumers read `TelegramStreamedMessage` objects from the queue at their own pace. The library handles session authentication, reconnection with exponential backoff, text sanitization, optional Telegram-backed translation, images, albums, and backpressure.
+`telegramlistener` receives real-time updates from configured Telegram channels
+and places normalized `TelegramStreamedMessage` objects on an
+`asyncio.Queue`. It optionally downloads configured photos and asks Telegram to
+translate configured text through the same user client.
 
----
+The package does not perform OCR, persist messages, authenticate accounts, or
+implement a historical dataset exporter.
 
 ## Repository layout
 
-```
+```text
 TelegramListener/
 ├── src/telegramlistener/
-│   ├── __init__.py        # Public API surface
-│   ├── _listener.py       # TelegramListener — core streaming class
-│   ├── _session.py        # SessionManager — auth lifecycle
+│   ├── __init__.py        # Public API
+│   ├── _listener.py       # Client-to-queue adapter
 │   ├── _models.py         # TelegramStreamedMessage
-│   └── _exceptions.py     # Library exception hierarchy
-├── example.py             # End-to-end usage script
-├── AGENTS.md              # Repository rules for maintainers and agents
-├── doc/testing.md         # Smoke-test and temporary-test workflow
-├── pyproject.toml         # Package metadata, deps, tool config
-└── .env.example           # Required environment variables
+│   └── _exceptions.py     # Configuration and translation errors
+├── smoke/
+│   ├── run.py             # Existing-session runtime smoke test
+│   ├── login.py           # Explicit one-shot session setup
+│   └── .env.example       # Smoke-test configuration template
+├── AGENTS.md              # Maintainer and agent guidance
+├── doc/testing.md         # Verification workflow
+├── pyproject.toml         # Package metadata and dependencies
+└── .gitignore              # Local credentials and build artifacts
 ```
 
-All public symbols are re-exported from `__init__.py`:
-`SessionManager`, `TelegramListener`, `TelegramStreamedMessage`, `TelegramListenerError`, `SessionError`, `ConfigurationError`, `TranslationError`.
-
----
-
-## Data models (`_models.py`)
-
----
-
-### `TelegramStreamedMessage`
-
-A frozen dataclass produced by `TelegramListener` for every incoming message.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `timestamp` | `int` | Unix timestamp (UTC seconds) of the original Telegram message. |
-| `channel_title` | `str` | Human-readable channel title (e.g. `"Al Jazeera"`). |
-| `channel_username` | `str \| None` | Telegram channel username when available. |
-| `channel_id` | `int` | Numeric Telegram channel identifier. Negative for channels/supergroups. |
-| `text` | `str \| None` | Sanitized original text or caption. |
-| `images` | `tuple[bytes, ...]` | Immutable attached photos downloaded into memory when the channel is configured in `image_channels`. |
-| `translated_text` | `str \| None` | Optional translation of `text`. |
-| `translation_language` | `str \| None` | ISO 639-1 target language when a translation is present. |
-| `id` | `str` | Auto-generated time-sortable ULID (26 chars). Not set via `__init__`. |
-
-`id` is created in `__post_init__` via `ulid.ULID()`. Because ULIDs embed a millisecond timestamp, messages can be sorted by `id` to recover arrival order.
-
-The `__repr__` includes the original and translated text fields as stored on the
-message, together with channel metadata and the number of downloaded images.
-
----
-
-## Exceptions (`_exceptions.py`)
-
-```
-TelegramListenerError          ← catch-all base
-├── SessionError               ← missing/revoked session; call run_manual_login()
-├── ConfigurationError         ← invalid listener or translation configuration
-└── TranslationError           ← Telegram cannot complete a requested translation
-```
-
----
-
-## Session management (`_session.py`)
-
-### `SessionManager`
-
-Owns all authentication logic. `TelegramListener` delegates auth entirely to this class.
-
-**Constructor parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `api_id` | `int` | required | From https://my.telegram.org |
-| `api_hash` | `str` | required | From https://my.telegram.org |
-| `phone` | `str` | required | International format, e.g. `"+34612345678"` |
-| `session_name` | `str` | `"telegram"` | Stem of the `.session` file |
-| `session_dir` | `Path \| None` | `~/.cache/telegramlistener/` | Directory for session files |
-
-Session files are Telethon SQLite databases. The full path on disk is `{session_dir}/{session_name}.session`. The directory is created automatically if missing.
-
-**Key methods:**
-
-#### `is_operational() -> bool` (async)
-
-1. Returns `False` immediately if the `.session` file does not exist.
-2. Connects a fresh `TelegramClient` and calls `is_user_authorized()`.
-3. If authorization returns `False`, or a fatal error (`AuthKeyDuplicatedError`, `AuthKeyUnregisteredError`, `UserDeactivatedError`) is raised, the session file is deleted (`_cleanup()`) and `False` is returned.
-4. Any other exception is treated as a transient health-check failure, returns
-   `False`, and preserves the session file.
-5. Returns `True` only when the session is confirmed valid.
-
-#### `run_manual_login()` (async)
-
-Interactive terminal login flow. Wraps `TelegramClient.start(phone=...)`, which handles SMS code and optional 2FA password prompts. Call this **once** before the first `TelegramListener.start()`. If the session is already valid, it is a no-op. On failure, the session file is cleaned up and `SessionError` is raised.
-
-#### `get_authorized_client() -> TelegramClient` (async)
-
-Creates one client, connects it, verifies authorization on that same connection,
-and returns it connected. It does not call `is_operational()` first or open a
-second validation connection. Raises `SessionError` if no valid session exists.
-The caller is responsible for calling `client.disconnect()` when done.
-
-#### `session_file -> Path` (property)
-
-Read-only path to the `.session` file on disk.
-
----
-
-## Core listener (`_listener.py`)
-
-### `TelegramListener`
-
-Registers a Telethon event handler, feeds messages into an `asyncio.Queue`, and manages the connection lifecycle.
-
-**Constructor parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `session_manager` | `SessionManager` | required | An authorized session manager |
-| `channels` | `Sequence[str]` | required | Channel usernames to monitor |
-| `image_channels` | `Sequence[str]` | `()` | Monitored channels whose photos to download |
-| `translation_channels` | `Sequence[str]` | `()` | Monitored channels to translate |
-| `translation_target_language` | `str` | `"en"` | Two-letter ISO 639-1 target language |
-| `translation_timeout` | `float` | `3.0` | Maximum total seconds per translation |
-| `translation_max_concurrency` | `int` | `2` | Maximum simultaneous translations |
-| `queue_maxsize` | `int` | `0` (unbounded) | Maximum messages buffered in `queue` |
-
-**Public attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `queue` | `asyncio.Queue[TelegramStreamedMessage \| None]` | Consumers read from this. `None` is the shutdown sentinel. |
-
----
-
-### Lifecycle
-
-```
-TelegramListener(...)      ← complete, immutable configuration
-        │
-        ▼
-    start()                ← blocks; registers handlers, runs reconnect loop
-        │
-   (running)
-        │
-  stop() / aclose()        ← graceful shutdown
-```
-
-Channel configuration is supplied once to the constructor. Usernames are
-normalized by stripping whitespace, an optional leading `@`, and capitalization.
-Duplicates are removed while preserving order. Translation channels must be a
-subset of monitored channels. Listener instances are single-use; create a new
-listener to change configuration or restart after shutdown.
-
-**`start()` (async, blocking)**
-
-1. Obtains an authorized client via `SessionManager.get_authorized_client()`.
-2. Registers `_on_new_message` and `_on_album` as Telethon event handlers, scoped to the configured channel usernames.
-3. Enters the reconnect loop:
-   - Calls `client.run_until_disconnected()`.
-   - On **fatal errors** (`AuthKeyDuplicatedError`, `AuthKeyUnregisteredError`, `UserDeactivatedError`): cleans up the invalid session and raises `SessionError`; no automatic login or retry is started.
-   - On **any other exception**: computes backoff delay = `min(60, 2^attempt) + jitter(0–1 s)`, waits, then reconnects the existing client if needed.
-   - Exits the loop when `stop()` / `aclose()` sets `_stop_event`.
-5. A `finally` block clears runtime state, disconnects the client, and puts
-   `None` on the queue. This also runs after cancellation or setup failure. If a
-   bounded queue is full, one buffered item is dropped so shutdown cannot block.
-
-**Reconnect backoff:**
-
-| Attempt | Base delay | Cap |
-|---------|-----------|-----|
-| 1 | 2 s | — |
-| 2 | 4 s | — |
-| 3 | 8 s | — |
-| … | 2^n s | 60 s |
-
-Each delay also has `random.uniform(0, 1)` seconds of jitter to avoid thundering herds.
-
-**`stop()`** (sync)
-
-Sets `_stop_event` and fires `client.disconnect()` as a background task via `asyncio.create_task`. Returns immediately — shutdown is asynchronous. Use when you cannot `await`.
-
-**`aclose()`** (async)
-
-Sets `_stop_event` and `await`s `client.disconnect()`. Guarantees the client is disconnected before returning. Prefer this over `stop()`. Automatically called by the `async with` context manager.
-
-**Context manager:**
-
-```python
-async with TelegramListener(manager, channels=["ajanews"]) as listener:
-    ...
-# aclose() is called automatically on exit
-```
-
----
-
-### Message handlers (`_on_new_message`, `_on_album`)
-
-Called by Telethon for every new message in the monitored channels.
-
-1. Ignores individual events that belong to an album; `_on_album` handles the complete group.
-2. Strips and sanitizes text via `_sanitize()` (unicode fix + emoji removal).
-3. Downloads attached photos into memory only for channels in `image_channels`. Messages with neither text nor configured images are discarded.
-4. Looks up and caches chat title and username by `chat_id`.
-5. If the normalized username is configured for translation and text is present, calls the listener's private `_translate_text()` before constructing the output model.
-6. On translation failure, logs a warning and continues with the original text and `translated_text=None`.
-7. Constructs a frozen `TelegramStreamedMessage` and calls `queue.put_nowait(msg)`.
-8. If the queue is full (`asyncio.QueueFull`), the message is **dropped** (not blocked) and a warning is logged. This preserves the Telethon event loop.
-9. Any other unhandled exception is caught and logged; the handler never raises.
-
-For every message that reaches the enqueue step, the listener logs individual
-timings at `INFO`: total `processing_ms`, Telegram translation
-`translation_ms` when applicable, and image `image_download_ms`. The image
-measurement covers only actual configured image-download attempts; metadata
-resolution and channel-filter checks are excluded. These are per-message
-measurements only; the library does not aggregate averages or percentiles.
-
----
-
-### Text sanitization
-
-```python
-def _sanitize(text: str) -> str:
-    return emoji.replace_emoji(ftfy.fix_text(text), replace="").strip()
-```
-
-- `ftfy.fix_text`: fixes mojibake, wrong encoding, bad Unicode.
-- `emoji.replace_emoji(..., replace="")`: removes all emoji characters.
-- `.strip()`: trims surrounding whitespace.
-
-Both original and translated strings pass through `_sanitize()` before reaching consumers. `text` is never replaced by the translation.
-
----
-
-## Translation inside the listener (`_listener.py`)
-
-`TelegramListener._translate_text()` calls Telethon's raw
-[`messages.translateText`](https://core.telegram.org/method/messages.translateText)
-request directly on the listener's active `TelegramClient`. There is no separate
-translator object, service, or Telegram connection. Telegram detects the source
-language, so the request only contains the plain text and target language.
-
-Operational safeguards:
-
-- Concurrency is configurable and defaults to two requests.
-- The configurable timeout defaults to three seconds and includes both waiting
-  for capacity and the Telegram RPC.
-- Empty input is rejected locally without calling Telegram.
-- Telegram RPC errors, timeouts, connection failures, and empty responses become `TranslationError`.
-- Automatic channel translation catches `TranslationError` and emits the original message.
-
-The automatic path translates one incoming message at a time. Telegram's batch capability is intentionally not used because the listener emits real-time events independently; batching would introduce an additional buffering delay and alter the queue contract.
-
----
-
-## Public API surface
+There is no session-management module. The caller creates a
+`TelegramClient`, performs any required one-time login, checks authorization,
+and passes the connected client to `TelegramListener`. Telethon 1.45.0 is the
+supported version. The `smoke/` scripts are outside the package and exist only
+to exercise that boundary with a real account. Their `.env` file is only a
+local input layer: credentials and scalar settings remain strings, while
+channel settings are JSON arrays converted once at the script boundary.
+
+## Public API
 
 ```python
 from telegramlistener import (
-    SessionManager,
-    TelegramListener,
-    TelegramStreamedMessage,
-    TelegramListenerError,
-    SessionError,
     ConfigurationError,
+    TelegramListener,
+    TelegramListenerError,
+    TelegramStreamedMessage,
     TranslationError,
 )
 ```
 
----
-
-## Typical usage pattern
+The main constructor is:
 
 ```python
-import asyncio
-from telegramlistener import SessionManager, TelegramListener
-
-async def consume(queue):
-    while True:
-        msg = await queue.get()
-        if msg is None:          # shutdown sentinel
-            break
-        print(msg)
-        queue.task_done()
-
-async def main():
-    manager = SessionManager(
-        api_id=12345,
-        api_hash="abc...",
-        phone="+34612345678",
-    )
-
-    # The session must be authorized explicitly before starting the listener.
-
-    async with TelegramListener(
-        session_manager=manager,
-        channels=[
-            "cnn",
-            "ajanews",
-        ],
-        translation_channels=["ajanews"],
-        translation_target_language="en",
-        translation_timeout=3.0,
-        queue_maxsize=1000,
-    ) as listener:
-        consumer = asyncio.create_task(consume(listener.queue))
-        try:
-            await listener.start()   # blocks until stopped or session invalid
-        finally:
-            consumer.cancel()
-
-asyncio.run(main())
+TelegramListener(
+    client=authorized_client,
+    channels=[...],
+    image_channels=[...],
+    translation_channels=[...],
+    translation_target_language="en",
+    translation_timeout=3.0,
+    translation_max_concurrency=2,
+    queue_maxsize=0,
+)
 ```
 
----
+`client` must already be connected and authorized. The listener does not call
+`connect()`, `start()`, `sign_in()`, or `is_user_authorized()`.
 
-## Environment variables and example configuration
+Configuration is validated once in the constructor and channel names are kept
+exactly as supplied. Channel configuration is immutable for the lifetime of the
+instance, and listener instances are single-use.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TELEGRAM_API_ID` | yes | Numeric API ID from my.telegram.org |
-| `TELEGRAM_API_HASH` | yes | API hash from my.telegram.org |
-| `TELEGRAM_PHONE` | yes | Phone number in international format |
-| `TELEGRAM_SESSION_NAME` | no | Session file stem (default: `telegram`) |
+## Client lifecycle
 
-The channel lists and typed listener settings used by `example.py` are ordinary
-Python values at the top of that file:
+The caller owns credentials and constructs the client with native Telethon
+connection options:
 
 ```python
-CHANNELS: list[str] = ["AjaNews", "almayadeen", "SabrenNewss"]
-IMAGE_CHANNELS: list[str] = []
-TRANSLATION_CHANNELS: list[str] = [
-    "AjaNews",
-    "almayadeen",
-    "SabrenNewss",
-]
-TRANSLATION_TARGET_LANGUAGE = "en"
-TRANSLATION_TIMEOUT = 3.0
-TRANSLATION_MAX_CONCURRENCY = 2
-QUEUE_MAXSIZE = 1000
+async with TelegramClient(
+    session_path,
+    api_id,
+    api_hash,
+    auto_reconnect=True,
+) as client:
+    if not await client.is_user_authorized():
+        raise RuntimeError("Manual login required")
+
+    listener = TelegramListener(client=client, channels=["cnn"])
+    await listener.start()
 ```
 
-`.env` is intentionally limited to credentials and session settings. It does
-not parse channel lists from comma-separated strings.
+The caller then creates the listener and starts it. `start()` registers the
+event handlers and awaits `client.run_until_disconnected()` once. Telethon
+owns transient transport reconnection using the options supplied to the
+client. If Telethon cannot reconnect after its configured attempts, the error
+propagates to the caller. The listener never disconnects the client supplied by
+the caller.
 
----
+The listener does not add a retry loop, exponential backoff, jitter, polling
+health check, or session cleanup policy. A process supervisor may restart the
+application after an unrecoverable error.
 
-## Dependencies
+The listener does not enable Telethon's `catch_up` mode. Replaying updates that
+arrived while the client was offline is an explicit application policy and is
+separate from this real-time queue contract.
 
-| Package | Purpose |
-|---------|---------|
-| `telethon >= 1.36` | Telegram MTProto client |
-| `ftfy >= 6.0` | Unicode text repair |
-| `emoji >= 2.1` | Emoji detection and removal |
-| `python-ulid >= 3.1` | Time-sortable unique IDs for messages |
-| `python-dotenv` | (optional, examples only) Load `.env` files |
+When the listener finishes, it places `None` on the queue as the shutdown
+sentinel. If a bounded queue is full, it drops one buffered item to guarantee
+that the sentinel can be delivered. The caller's `TelegramClient` context
+manager disconnects the client after the listener returns.
 
-Python 3.10+ required. Tested on 3.10, 3.11, 3.12.
+## Event flow
 
----
+```text
+TelegramClient update
+        │
+        ├── NewMessage ──┐
+        │                ├── normalize/enrich ──┐
+        └── Album ───────┘                      │
+                                                ▼
+                              TelegramStreamedMessage
+                                                │
+                                                ▼
+                                         asyncio.Queue
+```
 
-## Key design decisions
+`events.NewMessage` handles individual messages. Individual events with a
+`grouped_id` are ignored because `events.Album` delivers the complete album.
+The album handler uses the first message for text and metadata and collects
+configured photos from all messages in the album.
 
-**Session isolation.** `SessionManager` owns all auth state. `TelegramListener`
-never touches credentials directly; it obtains one authorized client from the
-manager. Session handling can be replaced or tested without changing the
-listener.
+Each handler catches and logs errors local to one incoming event. A malformed
+message or failed image download therefore does not terminate the update loop.
 
-**Queue-based output.** Using `asyncio.Queue` decouples message production from consumption. Consumers can be slow, concurrent, or replaceable at runtime. The `queue_maxsize=0` default is unbounded, so callers must set a bound if they cannot guarantee keeping up.
+## Message processing
 
-**Drop-on-full backpressure.** `put_nowait` + warning is chosen over `await queue.put()` to avoid blocking the Telethon event loop. Messages are lost rather than stalling the connection.
+For each accepted event the listener:
 
-**Sentinel for shutdown.** `None` is placed on the queue when the listener stops. Consumers should check for `None` to detect end-of-stream cleanly.
+1. resolves and caches channel title and username by chat ID;
+2. repairs Unicode text with `ftfy`;
+3. removes emoji and surrounding whitespace;
+4. downloads photos only when the configured channel is in
+   `image_channels`;
+5. translates text only when the channel is in `translation_channels`;
+6. builds an immutable `TelegramStreamedMessage`;
+7. calls `queue.put_nowait()`;
+8. logs processing timings and whether the item was queued.
 
-**Automatic reconnection.** Transient connection errors trigger exponential backoff (2^n seconds, capped at 60 s, plus uniform jitter). Fatal auth errors bypass the retry loop entirely and stop the listener.
+Messages with neither text nor configured images are discarded. A full bounded
+queue drops the incoming item and logs `queued=False`; the producer never
+waits on a slow consumer.
 
-**Lazy chat metadata.** `_chat_meta` is populated on first message per `chat_id`. This avoids upfront API calls for all channels at startup and keeps `start()` fast.
+## Data model
 
-**Text normalization.** All messages are Unicode-repaired and emoji-stripped before reaching the queue. Non-Latin scripts such as Arabic remain intact for translation and downstream processing.
+`TelegramStreamedMessage` is a frozen dataclass with:
 
-**Opt-in translation.** Translation is disabled when `translation_channels` is
-empty. All configuration is constructor-based and fixed for the listener's
-lifetime, keeping runtime state transitions out of the public API.
+| Field | Meaning |
+|---|---|
+| `id` | Generated time-sortable ULID. |
+| `timestamp` | Original Telegram message timestamp in Unix seconds. |
+| `channel_title` | Human-readable channel title. |
+| `channel_username` | Channel username when Telegram exposes one. |
+| `channel_id` | Numeric Telegram channel identifier. |
+| `text` | Sanitized original text or caption. |
+| `images` | Immutable tuple of downloaded photo bytes. |
+| `translated_text` | Optional translated text. |
+| `translation_language` | Target language when translation exists. |
 
-**Original text preservation.** `text` always contains the sanitized Telegram source. Translation is stored separately in `translated_text` with its `translation_language`, so downstream consumers decide which representation to search, display, or persist.
+The original text is never replaced by its translation. Consumers decide which
+field to index, display, persist, or process.
 
-**Shared Telegram connection.** Translation uses the same authorized user client as event streaming. It does not open a second session and does not add a third-party API dependency.
+## Translation
 
-**Graceful degradation.** Translation is enrichment, not a delivery requirement. Quota errors, timeouts, malformed responses, and connection failures are logged; the original message still reaches the output queue.
+`_translate_text()` invokes Telegram's raw
+[`messages.translateText`](https://core.telegram.org/method/messages.translateText)
+request through the same `TelegramClient` used for updates. It does not create a
+second client.
+
+Translation is bounded by a semaphore and a total timeout that includes
+waiting for capacity. Empty text is rejected locally. RPC errors, timeouts,
+malformed responses, and connection failures become `TranslationError`; the
+automatic handler logs the failure and still emits the original message.
+
+Translation is intentionally one message at a time. Batching would require
+buffering and would change the real-time queue contract.
+
+## Telemetry
+
+For each event reaching the enqueue step, the listener logs:
+
+- `processing_ms`: total listener processing time;
+- `translation_ms`: translation attempt time, when applicable;
+- `image_download_ms`: time spent on actual configured photo downloads;
+- `queued`: whether the item entered the queue.
+
+The per-message timing line is logged at `DEBUG`; startup and operational
+warnings use `INFO` or `WARNING`. The package does not retain metric history or
+calculate aggregates.
+
+## Error boundary
+
+`TelegramListenerError` is the base for package-level errors. The package
+raises `ConfigurationError` for invalid fixed configuration and uses
+`TranslationError` internally for fail-open translation handling. Native
+Telethon connection and authentication errors are not converted or retried by
+the listener; the caller owns the process-level policy for those failures.
+
+## Design invariants
+
+- The listener is a thin client-to-queue adapter.
+- Authentication is explicit and outside the listener.
+- Runtime code never prompts for a phone code or 2FA password.
+- Telethon is the only owner of transport reconnection.
+- The output model always preserves the sanitized original text.
+- Albums are emitted once, with their configured photos grouped together.
+- Slow consumers cannot block the Telethon update loop.
+- No historical retrieval or dataset export is hidden inside the real-time path.

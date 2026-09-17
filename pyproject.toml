@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telegramlistener"
-version = "0.2.0"
+version = "0.3.0"
 description = "Stream Telegram channel messages to an asyncio queue."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,10 +21,11 @@ classifiers = [
     "Topic :: Communications :: Chat",
 ]
 dependencies = [
-    "telethon>=1.36.0",
+    "telethon==1.45.0",
     "ftfy>=6.0",
     "emoji>=2.1.0",
     "python-ulid>=3.1.0",
+    "typing-extensions>=4.7.0",
 ]
 
 [project.urls]
