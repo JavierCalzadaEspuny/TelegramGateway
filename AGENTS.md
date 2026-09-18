@@ -1,126 +1,71 @@
-# AGENTS.md — TelegramGateway Contribution Guide
+# TelegramGateway contributor guide
 
-## Mission
+## Scope
 
-TelegramGateway is a small Python wrapper around Telethon with two narrow
-workflows:
+TelegramGateway is a small Telethon wrapper with two workflows:
 
-- `TelegramListener` streams configured channels to an
+- `TelegramListener` sends configured live channels to
   `asyncio.Queue[TelegramMessage | None]`.
-- `TelegramHistory` returns configured-channel messages in a bounded,
-  half-open Unix-second range as `list[TelegramMessage]`.
+- `TelegramHistory` returns configured channels from a bounded half-open
+  Unix-second range as `list[TelegramMessage]`.
 
-The package normalizes and optionally enriches Telegram messages. Credentials,
-sessions, authentication, persistence, JSON output, databases, OCR, and
-application policy belong to the caller.
+Keep images, albums, optional translation, deterministic IDs, listener
+backpressure, historical retries, and optional history progress. Do not add
+authentication, persistence, JSON output, databases, OCR, workers,
+notifications, or application policy.
 
-Prefer correctness and credential protection, then a small readable
-implementation, reuse of mature functionality, and only evidence-backed
-performance work or features.
+## Ownership
 
-## Design boundaries
+The caller owns credentials, session files, login, client creation,
+connection, authorization, disconnection, storage, and restart policy. Runtime
+code must not call interactive `start()` or disconnect a supplied client.
 
-The caller owns API credentials, the persistent Telethon session, one-time
-login and 2FA entry, client creation/connection/authorization/disconnection,
-and process restart policy. Runtime package code must not call interactive
-`start()`, request credentials, disconnect a client it did not create, or clean
-up session files.
+Fixed channels and processing options are validated when a coordinator is
+created. Do not add mutable setters. Use `ValueError` for invalid arguments and
+`RuntimeError` for invalid runtime state.
 
-The coordinators own fixed channel configuration and Telethon retrieval. They
-share one processor for text sanitization, album handling, configured image
-downloads, optional translation, and deterministic 26-character message IDs.
-`text` always remains the sanitized original; translation belongs only in
-`translated_text` and `translation_language`.
+Images and translation are optional enrichment and fail open. Retrieval,
+authorization, and channel-resolution errors propagate. Listener translation
+has bounded concurrency and no retry. History is sequential and retries only
+known transient translation failures and configured FloodWaits.
 
-`TelegramListener` is single-use, registers event handlers, and awaits
-`run_until_disconnected()`. A bounded full queue drops the incoming message
-rather than blocking Telethon's update loop; shutdown adds `None` as a
-sentinel. Telethon owns transient transport reconnection.
-
-`TelegramHistory.fetch(start: int, end: int)` accepts Unix seconds only and
-returns `[start, end)`. It retrieves channels sequentially with Telethon
-pagination, groups albums, and returns a complete in-memory list sorted across
-channels. The caller converts human dates and persists the result if needed.
-
-Translation is optional enrichment and fails open. The live path has no
-translation retries. History may wait for and retry `FloodWaitError` according
-to its configured retry policy, then emits the original message if retries are
-exhausted. Translation-specific non-transient `RPCError`, `ConnectionError`,
-and `OSError` are logged and fail open without retries; retrieval and other
-non-translation client failures propagate. Image-download failures also leave
-the logical message available. `TelegramHistory.fetch()` requires a connected
-client and raises `RuntimeError` before retrieval when it is disconnected.
-
-The smoke scripts use independent configuration namespaces. `listener.py` reads
-only `TELEGRAM_LISTENER_*` channel and enrichment settings; `history.py` reads
-only `TELEGRAM_HISTORY_*` settings. They share only the session and credential
-variables, so either workflow can be run without configuring the other.
-
-## Repository scope
+## Layout
 
 ```text
 src/telegram_gateway/
-    __init__.py       Public API
-    _listener.py      Live client-to-queue coordinator
-    _history.py       Bounded historical coordinator
-    _processing.py    Shared normalization and enrichment
-    _models.py        TelegramMessage
+    __init__.py
+    _listener.py
+    _history.py
+    _processing.py
+    _models.py
 smoke/
-    login.py          One-shot interactive session setup
-    listener.py       Existing-session live smoke test
-    history.py        Existing-session historical smoke test
-    .env.example      Local smoke-test configuration template
+    _common.py
+    login.py
+    listener.py
+    history.py
 doc/
-    architecture.md   Runtime design and ownership boundaries
-    history.md        Historical retrieval contract
-    testing.md        Verification and smoke-test workflow
+    architecture.md
+    listener.md
+    history.md
+    testing.md
 ```
 
-## Change discipline
-
-- Keep control flow direct and avoid new frameworks, configuration systems,
-  retry loops, hidden state, or abstractions without a demonstrated need.
-- Reuse Telethon for protocol handling, event delivery, pagination,
-  authorization primitives, and transport recovery; use the standard library
-  for queues, paths, logging, and JSON parsing.
-- Validate fixed configuration once. Do not add mutable channel setters.
-- Do not add dependencies unless an existing dependency or the standard
-  library cannot solve the need clearly and safely.
-- Do not create permanent tests. Use one focused test in an exact temporary
-  directory under `/private/tmp`, run it, then remove it immediately.
-- Never commit `smoke/.env`, Telethon session files, credentials, codes, or
-  generated build artifacts.
+Keep control flow direct. Do not add facades, services, repositories, adapters,
+configuration frameworks, or dependencies without a demonstrated need.
 
 ## Verification
 
-Before completion, run:
+Do not add permanent tests. Use exact disposable paths under `/private/tmp`,
+then remove them. Do not run real Telegram calls during routine review.
 
 ```bash
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-.venv/bin/mypy src smoke/listener.py smoke/history.py smoke/login.py
-.venv/bin/python -m compileall -q src smoke/listener.py smoke/history.py smoke/login.py
+.venv/bin/python -m compileall -q src smoke/login.py smoke/listener.py smoke/history.py smoke/_common.py
 uv lock --check
 uv build --wheel
 git diff --check
 ```
 
-Remove disposable `build/`, `dist/`, `*.egg-info`, and cache artifacts after
-verification when they are not being published. Also confirm that no `tests/`
-directory or temporary test file remains in the repository.
+Remove generated build and cache artifacts. Confirm that no credentials,
+sessions, `.env`, tests, or generated data are tracked.
 
-## Smoke workflow
-
-```bash
-cp smoke/.env.example smoke/.env
-uv sync --extra examples
-uv run smoke/login.py
-uv run smoke/listener.py
-uv run smoke/history.py
-```
-
-`login.py` alone performs interactive login. The other scripts must stop with a
-clear instruction when the session is absent or unauthorized, without
-prompting for credentials. Leave `listener.py` running while messages arrive;
-`history.py` performs a finite `[start, end)` query using the same authorized
-session.
+Do not commit, push, merge, or create a pull request unless explicitly asked.

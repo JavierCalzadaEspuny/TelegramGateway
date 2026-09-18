@@ -2,38 +2,25 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from telethon import TelegramClient
 from telethon.tl.custom.message import Message
+from tqdm import tqdm
 
-from ._exceptions import ConfigurationError
-from ._listener import _normalize_target_language, _validate_channels
 from ._models import TelegramMessage
-from ._processing import MessageProcessor, ProcessingPolicy, ProcessingResult
+from ._processing import (
+    MessageProcessor,
+    ProcessingPolicy,
+    _normalize_target_language,
+    _validate_channels,
+    _validate_channel_subset,
+    _validate_non_negative_integer,
+    _validate_positive_number,
+)
 
 _MAX_UNIX_SECONDS = ((1 << 48) - 1) // 1000
-
-
-def _validate_positive_number(value: object, *, parameter: str) -> float:
-    """Validate a finite positive duration."""
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value <= 0
-    ):
-        raise ConfigurationError(f"{parameter} must be greater than zero.")
-    return float(value)
-
-
-def _validate_non_negative_integer(value: object, *, parameter: str) -> int:
-    """Validate a non-negative integer setting."""
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ConfigurationError(f"{parameter} must be a non-negative integer.")
-    return value
 
 
 def _validate_unix_range(start: object, end: object) -> tuple[int, int]:
@@ -41,11 +28,11 @@ def _validate_unix_range(start: object, end: object) -> tuple[int, int]:
     validated_start = _validate_non_negative_integer(start, parameter="start")
     validated_end = _validate_non_negative_integer(end, parameter="end")
     if validated_start > _MAX_UNIX_SECONDS or validated_end > _MAX_UNIX_SECONDS:
-        raise ConfigurationError(
+        raise ValueError(
             "start and end must fit the deterministic ULID timestamp range."
         )
     if validated_start >= validated_end:
-        raise ConfigurationError("start must be earlier than end.")
+        raise ValueError("start must be earlier than end.")
     return validated_start, validated_end
 
 
@@ -61,7 +48,6 @@ class TelegramHistory:
         translation_channels: Sequence[str] = (),
         translation_target_language: str = "en",
         translation_timeout: float = 30.0,
-        translation_max_concurrency: int = 1,
         translation_retries: int = 2,
         history_wait_time: float = 1.0,
     ) -> None:
@@ -70,50 +56,21 @@ class TelegramHistory:
             parameter="channels",
             allow_empty=False,
         )
-        downloaded_image_channels = frozenset(
-            _validate_channels(
-                image_channels,
-                parameter="image_channels",
-                allow_empty=True,
-            )
+        downloaded_image_channels = _validate_channel_subset(
+            image_channels,
+            monitored_channels,
+            parameter="image_channels",
         )
-        unknown_image_channels = downloaded_image_channels.difference(
-            monitored_channels
+        translated_channels = _validate_channel_subset(
+            translation_channels,
+            monitored_channels,
+            parameter="translation_channels",
         )
-        if unknown_image_channels:
-            unknown = ", ".join(sorted(unknown_image_channels))
-            raise ConfigurationError(
-                f"image_channels must be monitored channels; unknown: {unknown}."
-            )
-
-        translated_channels = frozenset(
-            _validate_channels(
-                translation_channels,
-                parameter="translation_channels",
-                allow_empty=True,
-            )
-        )
-        unknown_translation_channels = translated_channels.difference(
-            monitored_channels
-        )
-        if unknown_translation_channels:
-            unknown = ", ".join(sorted(unknown_translation_channels))
-            raise ConfigurationError(
-                f"translation_channels must be monitored channels; unknown: {unknown}."
-            )
 
         normalized_timeout = _validate_positive_number(
             translation_timeout,
             parameter="translation_timeout",
         )
-        if (
-            isinstance(translation_max_concurrency, bool)
-            or not isinstance(translation_max_concurrency, int)
-            or translation_max_concurrency <= 0
-        ):
-            raise ConfigurationError(
-                "translation_max_concurrency must be a positive integer."
-            )
 
         self._client = client
         self._channels = monitored_channels
@@ -130,7 +87,7 @@ class TelegramHistory:
             ),
             policy=ProcessingPolicy(
                 translation_timeout=normalized_timeout,
-                translation_max_concurrency=translation_max_concurrency,
+                translation_max_concurrency=1,
                 translation_retries=_validate_non_negative_integer(
                     translation_retries,
                     parameter="translation_retries",
@@ -139,7 +96,13 @@ class TelegramHistory:
             ),
         )
 
-    async def fetch(self, *, start: int, end: int) -> list[TelegramMessage]:
+    async def fetch(
+        self,
+        *,
+        start: int,
+        end: int,
+        show_progress: bool = False,
+    ) -> list[TelegramMessage]:
         """Return every configured channel message in ``[start, end)``."""
         if not self._client.is_connected():
             raise RuntimeError(
@@ -149,20 +112,31 @@ class TelegramHistory:
         try:
             end_utc = datetime.fromtimestamp(end_seconds, tz=timezone.utc)
         except (OverflowError, OSError, ValueError) as exc:
-            raise ConfigurationError(
+            raise ValueError(
                 "History range is outside the supported UTC datetime range."
             ) from exc
         messages: list[TelegramMessage] = []
+        interval = end_seconds - start_seconds
+        total = len(self._channels) * interval
 
-        for channel in self._channels:
-            entity = await self._client.get_entity(channel)
-            await self._fetch_channel(
-                entity,
-                start=start_seconds,
-                end=end_seconds,
-                end_utc=end_utc,
-                messages=messages,
-            )
+        with tqdm(
+            total=total,
+            desc="History",
+            dynamic_ncols=True,
+            disable=not show_progress,
+        ) as progress:
+            for channel_index, channel in enumerate(self._channels):
+                entity = await self._client.get_entity(channel)
+                await self._fetch_channel(
+                    entity,
+                    start=start_seconds,
+                    end=end_seconds,
+                    end_utc=end_utc,
+                    messages=messages,
+                    progress=progress,
+                    progress_offset=channel_index * interval,
+                )
+                progress.update((channel_index + 1) * interval - progress.n)
 
         messages.sort(
             key=lambda message: (
@@ -181,6 +155,8 @@ class TelegramHistory:
         end: int,
         end_utc: datetime,
         messages: list[TelegramMessage],
+        progress: tqdm,
+        progress_offset: int,
     ) -> None:
         """Process one channel's historical stream in iterator order."""
         album: list[Message] = []
@@ -197,6 +173,9 @@ class TelegramHistory:
                 break
             if not start <= timestamp < end:
                 continue
+
+            completed = progress_offset + end - max(start, min(timestamp, end))
+            progress.update(completed - progress.n)
 
             grouped_id = message.grouped_id
             if grouped_id is None:
@@ -228,14 +207,6 @@ class TelegramHistory:
         messages: list[TelegramMessage],
     ) -> None:
         """Append one processed logical message."""
-        processed = await self._processor.process(source_messages)
-        self._append_processed(processed, messages)
-
-    @staticmethod
-    def _append_processed(
-        processed: ProcessingResult | None,
-        messages: list[TelegramMessage],
-    ) -> None:
-        """Keep successful processing results without their private telemetry."""
-        if processed is not None:
-            messages.append(processed.message)
+        message = await self._processor.process(source_messages)
+        if message is not None:
+            messages.append(message)

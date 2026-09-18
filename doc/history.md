@@ -1,90 +1,60 @@
-# Historical retrieval
+# History
 
-`TelegramHistory` retrieves a complete, bounded set of channel messages with a
-caller-owned, already connected and authorized `TelegramClient`. It does not
-log in, write JSON, store a database record, run OCR, or persist the returned
-messages.
+`TelegramHistory` retrieves a finite range from configured channels:
 
 ```python
-from telegram_gateway import TelegramHistory
-
 history = TelegramHistory(
-    client=client,
-    channels=["AjaNews", "almayadeen"],
-    image_channels=["AjaNews"],
-    translation_channels=["almayadeen"],
+    client,
+    channels,
+    image_channels=(),
+    translation_channels=(),
     translation_target_language="en",
     translation_timeout=30.0,
-    translation_max_concurrency=1,
     translation_retries=2,
     history_wait_time=1.0,
 )
-messages = await history.fetch(start=1_767_225_600, end=1_767_312_000)
+messages = await history.fetch(start=..., end=..., show_progress=False)
 ```
 
-## Range contract
+The client must already be connected and authorized. History never logs in or
+disconnects it. Create a new instance when its fixed channels or processing
+options change.
 
-`fetch(start: int, end: int)` accepts non-negative Unix seconds only. The range
-is half-open: it includes messages where `start <= timestamp < end`. `start`
-must be earlier than `end`.
+## Range and retrieval
 
-The caller must pass a connected client. `fetch()` checks this before validating
-the range or retrieving channels and raises `RuntimeError` if it is disconnected.
+`start` and `end` are non-negative Unix seconds. The range is half-open:
+`start <= timestamp < end`. Both values must fit the timestamp portion of the
+deterministic message ID, and `start` must be earlier than `end`.
 
-Convert human dates, time zones, and calendar boundaries in the calling
-application before calling `fetch`. This avoids ambiguous date parsing in the
-library and makes adjacent range queries non-overlapping:
+Channels are fetched sequentially with Telethon pagination and
+`history_wait_time`. Retrieval starts at the exclusive end and stops after
+reaching a message older than the start. The complete result is sorted by
+timestamp, channel ID, and Telegram message ID.
 
-```text
-[start, end) then [end, next_end)
-```
+`show_progress=True` displays one `tqdm` bar. Its total is the requested time
+interval multiplied by the number of channels. It estimates temporal coverage,
+not message count. The default is silent.
 
-## Retrieval and processing
+## Messages, albums, images, and translation
 
-Channels are retrieved sequentially. For each channel, Telethon paginates in
-its native descending order from the exclusive end boundary and uses
-`history_wait_time` between requests. TelegramGateway filters the half-open
-range locally and stops once it reaches a message older than `start`. After
-processing, it sorts the complete result by timestamp, channel ID, and
-Telegram message ID.
+Adjacent items with the same Telegram album ID become one `TelegramMessage`.
+The first item by message ID supplies identity and text; configured photos are
+downloaded in message-ID order.
 
-Adjacent Telegram album items are grouped into one `TelegramMessage`. The
-first item supplies the ID, timestamp, channel metadata, and text; all photos
-are considered in message-ID order. Photo bytes are downloaded only when the
-channel is in `image_channels`. A failed download is logged and does not remove
-the logical message; a photo-only message therefore remains available with an
-empty `images` tuple when downloads are disabled or unavailable.
+Image failures are logged and preserve the logical message. Translation runs
+only for `translation_channels`; successful output is stored separately from
+the original text.
 
-Text is Unicode-repaired and emoji-stripped. Translation is requested only for
-`translation_channels`; `text` always remains the sanitized original, while a
-successful translation appears in `translated_text` and
-`translation_language`. Every result has a deterministic 26-character ID, so
-the same Telegram source message has the same ID in live and historical flows.
+History retries translation timeouts and transient Telegram server failures up
+to `translation_retries`. It also waits for Telegram `FloodWait` durations
+before retrying. Other translation failures are logged without a retry. Any
+translation failure preserves the original message.
 
-## Translation, waits, and errors
+Channel resolution, authorization, and history retrieval failures propagate to
+the caller.
 
-History is deliberately slower than live processing. Its translation timeout,
-concurrency, retry count, and Telethon pagination wait are configurable.
-Translation timeouts, transient Telethon server failures, and ordinary
-translation-provider failures are retried up to `translation_retries`, then
-fail open with the original text. On `FloodWait`, history waits for Telegram's
-requested duration and retries under that same limit; an exhausted FloodWait
-also produces the original message without a translation. A non-transient
-translation `RPCError`, `ConnectionError`, or `OSError` is logged and fails
-open immediately without a retry. Authorization, configuration, channel
-resolution, and history-retrieval failures are not enrichment failures and
-propagate to the caller.
+## Memory
 
-Image-download failures and translation failures are local enrichment failures
-and preserve the message. Invalid configuration and ranges raise
-`ConfigurationError`. Failures resolving a channel or retrieving its history
-are not hidden; they propagate to the caller, which owns retry, restart, and
-persistence policy.
-
-## Memory and persistence
-
-`fetch()` returns a full `list[TelegramMessage]`, including any downloaded
-image bytes. Memory therefore grows with the requested time range, number of
-channels, message volume, and image size. Choose bounded ranges and persist,
-stream onward, or batch the returned data in the calling application. The
-package intentionally has no storage layer.
+`fetch()` returns one complete list, including downloaded image bytes. Memory
+therefore grows with range size, channel volume, and image size. Choose bounded
+ranges and persist or batch results in the calling application.

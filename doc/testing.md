@@ -1,59 +1,40 @@
-# Testing and operational verification
+# Verification
 
-## Smoke checks
-
-The `smoke/` scripts exercise a real account and an already authorized session.
-They are manual integration checks, not package authentication code.
+## Manual smoke workflow
 
 ```bash
 cp smoke/.env.example smoke/.env
-uv sync --extra examples
+uv sync --extra smoke
 uv run smoke/login.py
 uv run smoke/listener.py
 uv run smoke/history.py
 ```
 
-Fill in `smoke/.env` before running these commands. It is private, as are the
-session file, API hash, phone number, SMS code, and 2FA password. Channel
-settings are JSON arrays. Listener settings use the `TELEGRAM_LISTENER_*`
-prefix; history settings use `TELEGRAM_HISTORY_*`, so each smoke can be run
-with a different channel list and enrichment configuration.
+`login.py` is the only interactive script. Listener and history require the
+same existing authorized session and never request credentials. Their channel
+and enrichment settings use independent `TELEGRAM_LISTENER_*` and
+`TELEGRAM_HISTORY_*` variables.
 
-`smoke/login.py` is the only command that prompts for credentials. Both runtime
-scripts use the same authorized session and must stop with a clear instruction,
-without retrying login, if it is absent or unauthorized.
+Listener runs until interrupted and prints received messages. History performs
+one finite range query, optionally displays progress, and prints its result.
+Neither script persists messages.
 
-Leave `smoke/listener.py` running while messages arrive. Confirm that it prints
-each live `TelegramMessage` as an indented JSON-like representation, groups
-albums, downloads photos only for its configured image channels, keeps original
-text when translation fails, and stops cleanly with `Ctrl-C`.
+Keep `smoke/.env`, credentials, codes, passwords, and `*.session` files private.
 
-`smoke/history.py` performs one finite `[TELEGRAM_HISTORY_START,
-TELEGRAM_HISTORY_END)` query, using Unix seconds from `smoke/.env`, and prints
-each returned `TelegramMessage` in the same representation. It is not a live
-listener and it does not write the returned list anywhere.
+## Repository checks
 
-## Temporary behavioral tests
+Do not add permanent tests. Use a disposable diagnostic under `/private/tmp`
+for focused behavior checks and remove it afterwards.
 
-Permanent tests are intentionally not stored in this repository. For a focused
-regression check, create one test in an exact temporary directory under
-`/private/tmp`, run it against the repository source, and remove that directory
-immediately. Do not add a `tests/` directory, fixtures, snapshots, or test-only
-dependencies.
-
-## Permanent checks
-
-Run before completion:
+Before completion run:
 
 ```bash
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-.venv/bin/mypy src smoke/listener.py smoke/history.py smoke/login.py
-.venv/bin/python -m compileall -q src smoke/listener.py smoke/history.py smoke/login.py
+.venv/bin/python -m compileall -q src smoke/login.py smoke/listener.py smoke/history.py smoke/_common.py
 uv lock --check
 uv build --wheel
 git diff --check
 ```
 
-Remove disposable build outputs when they are not being published and confirm
-that no temporary test files remain.
+Remove generated build directories, package metadata, caches, and temporary
+diagnostics after checking them. Do not run real Telegram smoke scripts during
+routine review.

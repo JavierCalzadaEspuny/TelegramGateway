@@ -70,7 +70,3 @@ class TelegramMessage:
         data = self.to_dict()
         data["images"] = f"{len(self.images)} image(s)"
         return json.dumps(data, ensure_ascii=False, indent=2)
-
-    @property
-    def source_id(self) -> tuple[int, int]:
-        return self.channel_id, self.message_id

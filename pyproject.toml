@@ -1,56 +1,25 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "telegram-gateway"
-version = "1.0.0"
+version = "1.1.0"
 description = "Async Telegram gateway for live queues and bounded historical retrieval."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Javier Calzada", email = "calzada.espuny.javier@gmail.com" }]
-keywords = ["telegram", "telethon", "async", "history", "streaming", "messages"]
-classifiers = [
-    "Development Status :: 5 - Production/Stable",
-    "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Framework :: AsyncIO",
-    "Topic :: Communications :: Chat",
-]
 dependencies = [
     "telethon==1.45.0",
     "ftfy>=6.0",
     "emoji>=2.1.0",
     "python-ulid>=3.1.0",
-    "typing-extensions>=4.7.0",
+    "tqdm>=4.67.1",
 ]
 
-[project.urls]
-Homepage = "https://github.com/JavierCalzadaEspuny/TelegramListener"
-Repository = "https://github.com/JavierCalzadaEspuny/TelegramListener"
-Issues = "https://github.com/JavierCalzadaEspuny/TelegramListener/issues"
-
 [project.optional-dependencies]
-examples = ["python-dotenv>=1.0.0"]
-
-[tool.setuptools]
-include-package-data = true
+smoke = ["python-dotenv>=1.0.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["telegram_gateway*"]
-
-[tool.ruff]
-target-version = "py310"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-ignore = ["B008"]
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
-ignore_missing_imports = true

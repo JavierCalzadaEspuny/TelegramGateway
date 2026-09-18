@@ -4,11 +4,6 @@ from __future__ import annotations
 
 import logging
 
-from ._exceptions import (
-    ConfigurationError,
-    TelegramGatewayError,
-    TranslationError,
-)
 from ._history import TelegramHistory
 from ._listener import TelegramListener
 from ._models import TelegramMessage
@@ -16,10 +11,7 @@ from ._models import TelegramMessage
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
-    "ConfigurationError",
-    "TelegramGatewayError",
     "TelegramHistory",
     "TelegramListener",
     "TelegramMessage",
-    "TranslationError",
 ]
