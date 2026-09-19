@@ -68,5 +68,5 @@ class TelegramMessage:
 
     def __str__(self) -> str:
         data = self.to_dict()
-        data["images"] = f"{len(self.images)} image(s)"
+        data["images"] = f"{len(self.images)}"
         return json.dumps(data, ensure_ascii=False, indent=2)

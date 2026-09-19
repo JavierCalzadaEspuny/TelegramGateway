@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 from telethon.errors import AuthKeyError, UnauthorizedError
 
 from telegram_gateway import TelegramListener, TelegramMessage
 
-from _common import connected_client, float_env, int_env, list_env
+from _common import connected_client
+
+CHANNELS: list[str] = ["testosint01"]
+IMAGE_CHANNELS: list[str] = ["testosint01"]
+TRANSLATION_CHANNELS: list[str] = ["testosint01"]
+TRANSLATION_TARGET_LANGUAGE = "en"
+TRANSLATION_TIMEOUT = 3.0
+TRANSLATION_MAX_CONCURRENCY = 2
+QUEUE_MAXSIZE = 1000
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -31,9 +38,8 @@ async def consume(queue: asyncio.Queue[TelegramMessage | None]) -> None:
 
 
 async def main() -> None:
-    channels = list_env("TELEGRAM_LISTENER_MONITOR_CHANNELS")
-    if not channels:
-        raise RuntimeError("TELEGRAM_LISTENER_MONITOR_CHANNELS cannot be empty")
+    if not CHANNELS:
+        raise RuntimeError("Set CHANNELS at the top of smoke/listener.py")
 
     try:
         client = await connected_client()
@@ -43,19 +49,13 @@ async def main() -> None:
     try:
         listener = TelegramListener(
             client=client,
-            channels=channels,
-            image_channels=list_env("TELEGRAM_LISTENER_IMAGE_CHANNELS"),
-            translation_channels=list_env("TELEGRAM_LISTENER_TRANSLATION_CHANNELS"),
-            translation_target_language=os.getenv(
-                "TELEGRAM_LISTENER_TRANSLATION_TARGET_LANGUAGE", "en"
-            ),
-            translation_timeout=float_env(
-                "TELEGRAM_LISTENER_TRANSLATION_TIMEOUT", 3
-            ),
-            translation_max_concurrency=int_env(
-                "TELEGRAM_LISTENER_TRANSLATION_MAX_CONCURRENCY", 2
-            ),
-            queue_maxsize=int_env("TELEGRAM_LISTENER_QUEUE_MAXSIZE", 1000),
+            channels=CHANNELS,
+            image_channels=IMAGE_CHANNELS,
+            translation_channels=TRANSLATION_CHANNELS,
+            translation_target_language=TRANSLATION_TARGET_LANGUAGE,
+            translation_timeout=TRANSLATION_TIMEOUT,
+            translation_max_concurrency=TRANSLATION_MAX_CONCURRENCY,
+            queue_maxsize=QUEUE_MAXSIZE,
         )
         consumer = asyncio.create_task(consume(listener.queue))
         try:

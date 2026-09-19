@@ -1,4 +1,4 @@
-"""telegram_gateway — live streaming and bounded historical Telegram retrieval."""
+"""Telegram login tooling, live streaming, and bounded historical retrieval."""
 
 from __future__ import annotations
 

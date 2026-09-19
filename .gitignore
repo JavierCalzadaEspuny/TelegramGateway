@@ -16,7 +16,6 @@ venv/
 env/
 .env
 .env.*
-!.env.example
 
 # Test / tooling caches
 .pytest_cache/
@@ -50,7 +49,6 @@ docs/superpowers/
 *.session
 *.session-*
 
-# Local real smoke-test configuration
-smoke/.env
-smoke/*.session
-smoke/*.session-*
+.telegram
+
+.docs

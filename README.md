@@ -1,17 +1,18 @@
 # TelegramGateway
 
-TelegramGateway is a small async wrapper around Telethon. It does two things:
+TelegramGateway is a small async wrapper around Telethon. It does three things:
 
+- `telegram-login` prepares and authorizes a project-local Telegram session.
 - `TelegramListener` sends new channel messages to an `asyncio.Queue`.
 - `TelegramHistory` returns a bounded historical range as a list.
 
-Both produce immutable `TelegramMessage` objects. The library can group albums,
-download configured photos, translate configured channels, and generate a
-stable 26-character ID for each Telegram source message.
+The two retrieval workflows produce immutable `TelegramMessage` objects. The
+library can group albums, download configured photos, translate configured
+channels, and generate a stable 26-character ID for each Telegram source
+message.
 
-The caller owns credentials, login, the Telethon session, the connected client,
-and persistence. TelegramGateway never starts an interactive login or
-disconnects a client supplied by the caller.
+The login command is the only interactive component. Runtime code receives a
+caller-owned connected client and never logs in or disconnects it.
 
 ## Install
 
@@ -25,17 +26,62 @@ With uv:
 uv add git+https://github.com/JavierCalzadaEspuny/TelegramGateway.git
 ```
 
+## Login
+
+Run the command from the repository that should own the session:
+
+```bash
+uv run telegram-login --prepare
+uv run telegram-login
+```
+
+`--prepare` creates an idempotent local layout without asking for credentials:
+
+```text
+.telegram/
+├── .env
+├── .gitignore
+└── sessions/
+```
+
+The normal command also prepares missing paths. It reads existing values from
+`.telegram/.env`, prompts only for missing credentials, and writes those new
+values only after Telegram authorizes the session. Telegram codes are never
+stored. A 2FA password is requested only when Telegram requires it.
+
+Sessions use the digits from `TELEGRAM_PHONE` as their name, for example:
+
+```text
+.telegram/sessions/34600123456.session
+```
+
+All paths are relative to the current working directory. The generated
+`.telegram/.gitignore` ignores every credential and session file while keeping
+itself trackable. See [doc/login.md](doc/login.md).
+
 ## Client
 
-Create and authorize one client before using either workflow:
+Use the known project-local convention to create a client:
 
 ```python
+from pathlib import Path
+
+from dotenv import dotenv_values
 from telethon import TelegramClient
 
-client = TelegramClient("telegram", api_id=..., api_hash=...)
+config = dotenv_values(Path(".telegram/.env"), interpolate=False)
+phone = config["TELEGRAM_PHONE"] or ""
+session = Path(".telegram/sessions") / "".join(
+    character for character in phone if character.isdigit()
+)
+client = TelegramClient(
+    str(session),
+    int(config["TELEGRAM_API_ID"] or ""),
+    config["TELEGRAM_API_HASH"] or "",
+)
 await client.connect()
 if not await client.is_user_authorized():
-    raise RuntimeError("Create the Telegram session first")
+    raise RuntimeError("Run `uv run telegram-login` first")
 ```
 
 Disconnect it in the calling application when finished.
@@ -113,6 +159,7 @@ writing files.
 
 ## Repository checks
 
-The package reads no environment variables. The manual scripts under `smoke/`
-load `smoke/.env`; see [doc/testing.md](doc/testing.md). Architecture and
+The manual scripts under `smoke/` use `.telegram/.env` and its authorized
+session. Set their workflow options directly in `smoke/listener.py` and
+`smoke/history.py`; see [doc/testing.md](doc/testing.md). Architecture and
 ownership boundaries are in [doc/architecture.md](doc/architecture.md).

@@ -83,31 +83,26 @@ wheels = [
 
 [[package]]
 name = "telegram-gateway"
-version = "1.1.0"
+version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "emoji" },
     { name = "ftfy" },
+    { name = "python-dotenv" },
     { name = "python-ulid" },
     { name = "telethon" },
     { name = "tqdm" },
-]
-
-[package.optional-dependencies]
-smoke = [
-    { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "emoji", specifier = ">=2.1.0" },
     { name = "ftfy", specifier = ">=6.0" },
-    { name = "python-dotenv", marker = "extra == 'smoke'", specifier = ">=1.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-ulid", specifier = ">=3.1.0" },
     { name = "telethon", specifier = "==1.45.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
-provides-extras = ["smoke"]
 
 [[package]]
 name = "telethon"

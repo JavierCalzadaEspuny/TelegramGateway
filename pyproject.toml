@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telegram-gateway"
-version = "1.1.0"
-description = "Async Telegram gateway for live queues and bounded historical retrieval."
+version = "1.2.0"
+description = "Project-local Telegram login, live queues, and bounded history."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -14,11 +14,12 @@ dependencies = [
     "ftfy>=6.0",
     "emoji>=2.1.0",
     "python-ulid>=3.1.0",
+    "python-dotenv>=1.0.0",
     "tqdm>=4.67.1",
 ]
 
-[project.optional-dependencies]
-smoke = ["python-dotenv>=1.0.0"]
+[project.scripts]
+telegram-login = "telegram_gateway.login:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

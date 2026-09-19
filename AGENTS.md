@@ -2,23 +2,30 @@
 
 ## Scope
 
-TelegramGateway is a small Telethon wrapper with two workflows:
+TelegramGateway is a small Telethon wrapper with three entry points:
 
+- `telegram-login` prepares and authorizes a project-local session.
 - `TelegramListener` sends configured live channels to
   `asyncio.Queue[TelegramMessage | None]`.
 - `TelegramHistory` returns configured channels from a bounded half-open
   Unix-second range as `list[TelegramMessage]`.
 
-Keep images, albums, optional translation, deterministic IDs, listener
-backpressure, historical retries, and optional history progress. Do not add
-authentication, persistence, JSON output, databases, OCR, workers,
+Keep project-local login, images, albums, optional translation, deterministic
+IDs, listener backpressure, historical retries, and optional history progress.
+Do not add message persistence, JSON output, databases, OCR, workers,
 notifications, or application policy.
 
 ## Ownership
 
-The caller owns credentials, session files, login, client creation,
-connection, authorization, disconnection, storage, and restart policy. Runtime
-code must not call interactive `start()` or disconnect a supplied client.
+The login command owns `.telegram/.env`, phone-named sessions, interactive
+authorization, and the client it creates. It writes newly entered credentials
+only after successful authorization and never stores Telegram codes. Do not add
+global paths, public session helpers, account managers, profiles, or a phone
+CLI option.
+
+Runtime callers own client creation, connection, authorization checks,
+disconnection, storage, and restart policy. Listener and history must not call
+interactive `start()` or disconnect a supplied client.
 
 Fixed channels and processing options are validated when a coordinator is
 created. Do not add mutable setters. Use `ValueError` for invalid arguments and
@@ -38,20 +45,23 @@ src/telegram_gateway/
     _history.py
     _processing.py
     _models.py
+    login.py
 smoke/
     _common.py
-    login.py
     listener.py
     history.py
 doc/
     architecture.md
     listener.md
     history.md
+    login.md
     testing.md
 ```
 
 Keep control flow direct. Do not add facades, services, repositories, adapters,
 configuration frameworks, or dependencies without a demonstrated need.
+Smoke workflow settings belong as constants in their scripts; do not add a
+second environment file or smoke-specific configuration layer.
 
 ## Verification
 
@@ -59,7 +69,7 @@ Do not add permanent tests. Use exact disposable paths under `/private/tmp`,
 then remove them. Do not run real Telegram calls during routine review.
 
 ```bash
-.venv/bin/python -m compileall -q src smoke/login.py smoke/listener.py smoke/history.py smoke/_common.py
+.venv/bin/python -m compileall -q src smoke/listener.py smoke/history.py smoke/_common.py
 uv lock --check
 uv build --wheel
 git diff --check
