@@ -7,9 +7,12 @@ import logging
 
 from telethon.errors import AuthKeyError, UnauthorizedError
 
-from telegram_gateway import TelegramListener, TelegramMessage
-
-from _common import connected_client
+from telegram_gateway import (
+    TelegramListener,
+    TelegramMessage,
+    TelegramSession,
+    TelegramSessionError,
+)
 
 CHANNELS: list[str] = ["testosint01"]
 IMAGE_CHANNELS: list[str] = ["testosint01"]
@@ -42,28 +45,24 @@ async def main() -> None:
         raise RuntimeError("Set CHANNELS at the top of smoke/listener.py")
 
     try:
-        client = await connected_client()
-    except RuntimeError as exc:
+        async with TelegramSession() as client:
+            listener = TelegramListener(
+                client=client,
+                channels=CHANNELS,
+                image_channels=IMAGE_CHANNELS,
+                translation_channels=TRANSLATION_CHANNELS,
+                translation_target_language=TRANSLATION_TARGET_LANGUAGE,
+                translation_timeout=TRANSLATION_TIMEOUT,
+                translation_max_concurrency=TRANSLATION_MAX_CONCURRENCY,
+                queue_maxsize=QUEUE_MAXSIZE,
+            )
+            consumer = asyncio.create_task(consume(listener.queue))
+            try:
+                await listener.start()
+            finally:
+                await consumer
+    except TelegramSessionError as exc:
         logger.error("%s", exc)
-        return
-    try:
-        listener = TelegramListener(
-            client=client,
-            channels=CHANNELS,
-            image_channels=IMAGE_CHANNELS,
-            translation_channels=TRANSLATION_CHANNELS,
-            translation_target_language=TRANSLATION_TARGET_LANGUAGE,
-            translation_timeout=TRANSLATION_TIMEOUT,
-            translation_max_concurrency=TRANSLATION_MAX_CONCURRENCY,
-            queue_maxsize=QUEUE_MAXSIZE,
-        )
-        consumer = asyncio.create_task(consume(listener.queue))
-        try:
-            await listener.start()
-        finally:
-            await consumer
-    finally:
-        await client.disconnect()
 
 
 if __name__ == "__main__":

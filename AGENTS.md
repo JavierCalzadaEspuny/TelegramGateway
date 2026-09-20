@@ -2,9 +2,10 @@
 
 ## Scope
 
-TelegramGateway is a small Telethon wrapper with three entry points:
+TelegramGateway is a small Telethon wrapper with four entry points:
 
 - `telegram-login` prepares and authorizes a project-local session.
+- `TelegramSession` loads that session and owns one connected runtime client.
 - `TelegramListener` sends configured live channels to
   `asyncio.Queue[TelegramMessage | None]`.
 - `TelegramHistory` returns configured channels from a bounded half-open
@@ -18,14 +19,15 @@ notifications, or application policy.
 ## Ownership
 
 The login command owns `.telegram/.env`, phone-named sessions, interactive
-authorization, and the client it creates. It writes newly entered credentials
-only after successful authorization and never stores Telegram codes. Do not add
-global paths, public session helpers, account managers, profiles, or a phone
-CLI option.
+authorization, and its temporary client. It writes newly entered credentials
+only after successful authorization and never stores Telegram codes.
 
-Runtime callers own client creation, connection, authorization checks,
-disconnection, storage, and restart policy. Listener and history must not call
-interactive `start()` or disconnect a supplied client.
+`TelegramSession` owns runtime configuration loading, session-path derivation,
+client creation, connection, authorization checks, and disconnection. It never
+starts interactive authorization. Callers own when the lifecycle begins and
+ends, client options, storage, and restart policy. Listener and history must
+not disconnect a supplied client. Do not add global paths, account managers,
+profiles, automatic login, or a phone CLI option.
 
 Fixed channels and processing options are validated when a coordinator is
 created. Do not add mutable setters. Use `ValueError` for invalid arguments and
@@ -45,13 +47,14 @@ src/telegram_gateway/
     _history.py
     _processing.py
     _models.py
+    _session.py
     login.py
 smoke/
-    _common.py
     listener.py
     history.py
 doc/
     architecture.md
+    session.md
     listener.md
     history.md
     login.md
@@ -69,7 +72,7 @@ Do not add permanent tests. Use exact disposable paths under `/private/tmp`,
 then remove them. Do not run real Telegram calls during routine review.
 
 ```bash
-.venv/bin/python -m compileall -q src smoke/listener.py smoke/history.py smoke/_common.py
+.venv/bin/python -m compileall -q src smoke/listener.py smoke/history.py
 uv lock --check
 uv build --wheel
 git diff --check

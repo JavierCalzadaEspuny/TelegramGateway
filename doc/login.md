@@ -67,9 +67,9 @@ credential file unchanged.
 
 ## Ownership and security
 
-The command owns and disconnects only the `TelegramClient` it creates. It does
-not expose a session manager, client factory, or path helper. Consumer code
-uses the documented `.telegram/sessions/<phone-digits>.session` convention.
+The command owns and disconnects only the temporary `TelegramClient` it creates.
+Runtime applications use `TelegramSession`, which shares this layout and owns
+their connected client without exposing credentials or session-path rules.
 
 `.telegram/.env`, 2FA passwords, and `*.session` files are secrets. The session
 file grants access to the Telegram account and must not be copied into source
@@ -77,6 +77,7 @@ control or shared. Generated directories and sensitive files receive
 restrictive permissions when the platform supports them.
 
 Every path is relative to the command's current working directory. Run login
-and the consuming application from the same project root.
+from the project root, then pass that root to `TelegramSession` or start the
+consuming application there.
 
 Remember to add `.telegram` to your global `.gitignore` rules.

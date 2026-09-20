@@ -4,22 +4,26 @@
 `asyncio.Queue[TelegramMessage | None]`.
 
 ```python
-listener = TelegramListener(
-    client,
-    channels,
-    image_channels=(),
-    translation_channels=(),
-    translation_target_language="en",
-    translation_timeout=3.0,
-    translation_max_concurrency=2,
-    queue_maxsize=0,
-)
-await listener.start()
+from telegram_gateway import TelegramListener, TelegramSession
+
+async with TelegramSession() as client:
+    listener = TelegramListener(
+        client,
+        channels,
+        image_channels=(),
+        translation_channels=(),
+        translation_target_language="en",
+        translation_timeout=3.0,
+        translation_max_concurrency=2,
+        queue_maxsize=0,
+    )
+    await listener.start()
 ```
 
-The client must already be connected and authorized. The listener never logs
-in or disconnects it. A listener is single-use; create a new instance after
-`start()` finishes or when its fixed configuration changes.
+The client must already be connected and authorized. `TelegramSession` is the
+standard owner, though any compatible connected client can be supplied. The
+listener never logs in or disconnects it. A listener is single-use; create a
+new instance after `start()` finishes or when its fixed configuration changes.
 
 ## Queue and lifecycle
 

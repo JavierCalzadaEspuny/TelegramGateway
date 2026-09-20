@@ -14,6 +14,8 @@ from pathlib import Path
 from dotenv import dotenv_values, set_key
 from telethon import TelegramClient
 
+from ._session import _normalize_phone, _parse_api_id, _paths
+
 _ENV_TEMPLATE = (
     "TELEGRAM_API_ID=\n"
     "TELEGRAM_API_HASH=\n"
@@ -33,9 +35,8 @@ def _restrict(path: Path, mode: int) -> None:
 
 def _prepare(root: Path) -> tuple[Path, Path]:
     """Create the local Telegram layout without replacing credentials."""
-    telegram_dir = root / ".telegram"
-    sessions_dir = telegram_dir / "sessions"
-    env_file = telegram_dir / ".env"
+    env_file, sessions_dir = _paths(root)
+    telegram_dir = env_file.parent
 
     telegram_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     sessions_dir.mkdir(mode=0o700, exist_ok=True)
@@ -67,14 +68,6 @@ def _missing_value(
             raise ValueError(f"{name} cannot be empty.")
         staged[name] = value
     return value
-
-
-def _normalized_phone(phone: str) -> str:
-    """Return the digits used for the project-local session filename."""
-    normalized = "".join(character for character in phone if character.isdigit())
-    if not normalized:
-        raise ValueError("TELEGRAM_PHONE must contain at least one digit.")
-    return normalized
 
 
 def _persist(env_file: Path, staged: dict[str, str]) -> None:
@@ -119,12 +112,7 @@ async def _login(root: Path) -> Path:
         "TELEGRAM_API_ID",
         "Telegram API ID: ",
     )
-    try:
-        api_id = int(raw_api_id)
-    except ValueError as exc:
-        raise ValueError("TELEGRAM_API_ID must be an integer.") from exc
-    if api_id <= 0:
-        raise ValueError("TELEGRAM_API_ID must be greater than zero.")
+    api_id = _parse_api_id(raw_api_id)
 
     api_hash = _missing_value(
         values,
@@ -138,7 +126,7 @@ async def _login(root: Path) -> Path:
         "TELEGRAM_PHONE",
         "Telegram phone: ",
     ).strip()
-    session = sessions_dir / _normalized_phone(phone)
+    session = sessions_dir / _normalize_phone(phone)
 
     configured_password = values.get("TELEGRAM_2FA_PASSWORD") or ""
 

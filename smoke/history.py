@@ -7,9 +7,7 @@ import logging
 
 from telethon.errors import AuthKeyError, UnauthorizedError
 
-from telegram_gateway import TelegramHistory
-
-from _common import connected_client
+from telegram_gateway import TelegramHistory, TelegramSession, TelegramSessionError
 
 CHANNELS: list[str] = ["testosint01"]
 IMAGE_CHANNELS: list[str] = ["testosint01"]
@@ -34,28 +32,25 @@ async def main() -> None:
         raise RuntimeError("Set CHANNELS at the top of smoke/history.py")
 
     try:
-        client = await connected_client()
-    except RuntimeError as exc:
+        async with TelegramSession() as client:
+            history = TelegramHistory(
+                client=client,
+                channels=CHANNELS,
+                image_channels=IMAGE_CHANNELS,
+                translation_channels=TRANSLATION_CHANNELS,
+                translation_target_language=TRANSLATION_TARGET_LANGUAGE,
+                translation_timeout=TRANSLATION_TIMEOUT,
+                translation_retries=TRANSLATION_RETRIES,
+                history_wait_time=HISTORY_WAIT_TIME,
+            )
+            messages = await history.fetch(
+                start=START,
+                end=END,
+                show_progress=SHOW_PROGRESS,
+            )
+    except TelegramSessionError as exc:
         logger.error("%s", exc)
         return
-    try:
-        history = TelegramHistory(
-            client=client,
-            channels=CHANNELS,
-            image_channels=IMAGE_CHANNELS,
-            translation_channels=TRANSLATION_CHANNELS,
-            translation_target_language=TRANSLATION_TARGET_LANGUAGE,
-            translation_timeout=TRANSLATION_TIMEOUT,
-            translation_retries=TRANSLATION_RETRIES,
-            history_wait_time=HISTORY_WAIT_TIME,
-        )
-        messages = await history.fetch(
-            start=START,
-            end=END,
-            show_progress=SHOW_PROGRESS,
-        )
-    finally:
-        await client.disconnect()
 
     for message in messages:
         print(message)

@@ -3,22 +3,26 @@
 `TelegramHistory` retrieves a finite range from configured channels:
 
 ```python
-history = TelegramHistory(
-    client,
-    channels,
-    image_channels=(),
-    translation_channels=(),
-    translation_target_language="en",
-    translation_timeout=30.0,
-    translation_retries=2,
-    history_wait_time=1.0,
-)
-messages = await history.fetch(start=..., end=..., show_progress=False)
+from telegram_gateway import TelegramHistory, TelegramSession
+
+async with TelegramSession() as client:
+    history = TelegramHistory(
+        client,
+        channels,
+        image_channels=(),
+        translation_channels=(),
+        translation_target_language="en",
+        translation_timeout=30.0,
+        translation_retries=2,
+        history_wait_time=1.0,
+    )
+    messages = await history.fetch(start=..., end=..., show_progress=False)
 ```
 
-The client must already be connected and authorized. History never logs in or
-disconnects it. Create a new instance when its fixed channels or processing
-options change.
+The client must already be connected and authorized. `TelegramSession` is the
+standard owner, though any compatible connected client can be supplied.
+History never logs in or disconnects it. Create a new instance when its fixed
+channels or processing options change.
 
 ## Range and retrieval
 

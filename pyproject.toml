@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telegram-gateway"
-version = "1.2.0"
-description = "Project-local Telegram login, live queues, and bounded history."
+version = "1.3.0"
+description = "Managed Telegram sessions, live queues, and bounded history."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

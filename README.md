@@ -1,8 +1,9 @@
 # TelegramGateway
 
-TelegramGateway is a small async wrapper around Telethon. It does three things:
+TelegramGateway is a small async wrapper around Telethon. It does four things:
 
 - `telegram-login` prepares and authorizes a project-local Telegram session.
+- `TelegramSession` opens and owns the authorized runtime client.
 - `TelegramListener` sends new channel messages to an `asyncio.Queue`.
 - `TelegramHistory` returns a bounded historical range as a list.
 
@@ -11,8 +12,9 @@ library can group albums, download configured photos, translate configured
 channels, and generate a stable 26-character ID for each Telegram source
 message.
 
-The login command is the only interactive component. Runtime code receives a
-caller-owned connected client and never logs in or disconnects it.
+The login command is the only interactive component. Runtime applications give
+`TelegramSession` a project root; it loads credentials, finds the phone-named
+session, connects, verifies authorization, and disconnects its client.
 
 ## Install
 
@@ -59,55 +61,50 @@ All paths are relative to the current working directory. The generated
 `.telegram/.gitignore` ignores every credential and session file while keeping
 itself trackable. See [doc/login.md](doc/login.md).
 
-## Client
+## Runtime session
 
-Use the known project-local convention to create a client:
+Use `TelegramSession` instead of reading credentials or constructing a
+`TelegramClient` in each application:
 
 ```python
 from pathlib import Path
 
-from dotenv import dotenv_values
-from telethon import TelegramClient
+from telegram_gateway import TelegramSession
 
-config = dotenv_values(Path(".telegram/.env"), interpolate=False)
-phone = config["TELEGRAM_PHONE"] or ""
-session = Path(".telegram/sessions") / "".join(
-    character for character in phone if character.isdigit()
-)
-client = TelegramClient(
-    str(session),
-    int(config["TELEGRAM_API_ID"] or ""),
-    config["TELEGRAM_API_HASH"] or "",
-)
-await client.connect()
-if not await client.is_user_authorized():
-    raise RuntimeError("Run `uv run telegram-login` first")
+async with TelegramSession(Path.cwd()) as client:
+    # Pass the connected client to TelegramListener or TelegramHistory.
+    ...
 ```
 
-Disconnect it in the calling application when finished.
+The project root defaults to `Path.cwd()`. Additional keyword arguments are
+forwarded to Telethon, for example `TelegramSession(receive_updates=False)`.
+Missing configuration, missing session files, and unauthorized sessions raise
+`TelegramSessionError` without starting an interactive login. See
+[doc/session.md](doc/session.md).
 
 ## Listener
 
 ```python
 import asyncio
 
-from telegram_gateway import TelegramListener
+from telegram_gateway import TelegramListener, TelegramSession
 
-listener = TelegramListener(
-    client,
-    ["AjaNews", "almayadeen"],
-    image_channels=["AjaNews"],
-    translation_channels=["almayadeen"],
-    queue_maxsize=1000,
-)
+async with TelegramSession() as client:
+    listener = TelegramListener(
+        client,
+        ["AjaNews", "almayadeen"],
+        image_channels=["AjaNews"],
+        translation_channels=["almayadeen"],
+        queue_maxsize=1000,
+    )
 
-async def consume() -> None:
-    while (message := await listener.queue.get()) is not None:
-        print(message)
+    async def consume() -> None:
+        while (message := await listener.queue.get()) is not None:
+            print(message)
 
-consumer = asyncio.create_task(consume())
-await listener.start()
-await consumer
+    consumer = asyncio.create_task(consume())
+    await listener.start()
+    await consumer
 ```
 
 `start()` runs until the client disconnects. A full bounded queue drops the
@@ -117,19 +114,20 @@ incoming message rather than blocking Telethon. `None` marks shutdown. See
 ## History
 
 ```python
-from telegram_gateway import TelegramHistory
+from telegram_gateway import TelegramHistory, TelegramSession
 
-history = TelegramHistory(
-    client,
-    ["AjaNews", "almayadeen"],
-    image_channels=["AjaNews"],
-    translation_channels=["almayadeen"],
-)
-messages = await history.fetch(
-    start=1_767_225_600,
-    end=1_767_312_000,
-    show_progress=True,
-)
+async with TelegramSession() as client:
+    history = TelegramHistory(
+        client,
+        ["AjaNews", "almayadeen"],
+        image_channels=["AjaNews"],
+        translation_channels=["almayadeen"],
+    )
+    messages = await history.fetch(
+        start=1_767_225_600,
+        end=1_767_312_000,
+        show_progress=True,
+    )
 ```
 
 The result contains `[start, end)` in Unix seconds and is sorted by timestamp,
@@ -159,7 +157,7 @@ writing files.
 
 ## Repository checks
 
-The manual scripts under `smoke/` use `.telegram/.env` and its authorized
-session. Set their workflow options directly in `smoke/listener.py` and
+The manual scripts under `smoke/` use `TelegramSession` with the project-local
+login. Set workflow options directly in `smoke/listener.py` and
 `smoke/history.py`; see [doc/testing.md](doc/testing.md). Architecture and
 ownership boundaries are in [doc/architecture.md](doc/architecture.md).
